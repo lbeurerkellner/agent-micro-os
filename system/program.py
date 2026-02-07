@@ -1,0 +1,302 @@
+import asyncio
+import json
+import sys
+import uuid
+from dataclasses import dataclass, field
+from fs.providers import ModelProvider
+from system.context import SystemContext
+from system.tools import TOOLS
+
+from agents import Runner, Agent, RawResponsesStreamEvent, RunItemStreamEvent, function_tool, ModelSettings
+
+@dataclass
+class Program:
+    # paths to tools available
+    tools: list[callable]
+
+    # tool paths as declared in the program (e.g. /tools/read)
+    tool_paths: list[str]
+
+    # input prompt
+    prompt: str
+
+    # system prompt, if not default
+    system_prompt: str | None = None
+
+def parse(contents: str):
+    """
+    A program looks like this
+
+    ```
+    [.SYSTEM_PROMPT
+    <optional system prompt, if not present the default system prompt will be used>]
+    .PROMPT
+    <system prompt>
+    [.TOOLS
+    /tools/tool1
+    /tools/tool2]
+    ```
+    [...] is optional.
+    """
+    lines = contents.splitlines()
+    system_prompt = None
+    tools: list[callable] = []
+    tool_paths: list[str] = []
+    prompt_lines = []
+    section = None
+
+    assert ".PROMPT" in lines, "Program must contain a .PROMPT section"
+
+    for line in lines:
+        if line == ".SYSTEM_PROMPT":
+            section = "system_prompt"
+            continue
+        elif line == ".PROMPT":
+            section = "prompt"
+            continue
+        elif line == ".TOOLS":
+            section = "tools"
+            continue
+        elif line.startswith(".INCLUDE"):
+            # support including other program files, e.g. .INCLUDE /programs/helper.txt
+            include_path = line[len(".INCLUDE"):].strip()
+            try:
+                include_contents = SystemContext.current().fs().read(include_path).decode()
+                line = include_contents.strip()  # replace the include line with the contents of the included file
+            except Exception as e:
+                raise ValueError(f"Failed to include file '{include_path}' in program: {str(e)}")
+        
+        if section == "system_prompt":
+            system_prompt = (system_prompt or "") + line + "\n"
+        elif section == "prompt":
+            prompt_lines.append(line)
+        elif section == "tools":
+            tool_name = line.strip()
+            assert tool_name.startswith("/tools/"), f"Tool paths must start with /tools/, but got '{tool_name}'"
+            # strp prefix
+            tool_name = tool_name[len("/tools/"):]
+            # resolve tools via 'TOOLS'
+            if tool_name in TOOLS:
+                tools.append(TOOLS[tool_name])
+                tool_paths.append(f"/tools/{tool_name}")
+            else:
+                raise ValueError(f"Executable links tool '{tool_name}' which does not exist in /tools/")
+
+    
+    prompt = "\n".join(prompt_lines).strip()
+    return Program(tools=tools, tool_paths=tool_paths, system_prompt=system_prompt, prompt=prompt)
+
+async def run(program: Program, filepath: str, *args):
+    models = ModelProvider()
+    
+    context = SystemContext.current()
+
+    # get model configuration
+    model_configuration = context.read("/etc/model/default", "openai gpt-5-mini")
+    
+    # get system prompt, if not provided use default
+    system_prompt = program.system_prompt or context.read("/etc/AGENTS.md", "You are a helpful assistant.")
+    
+    # parse model configuration
+    try:
+        provider, model = model_configuration.split()
+    except ValueError:
+        provider, model = "openai", "gpt-5-mini"
+
+    # ensure model and provider are available
+    assert models.has_provider(provider), f"{provider} provider is not available. Please make sure /etc/model/default points to a model that is currently available (/models/<provider>/<model>)"
+    assert models.has_model(provider, model), f"{model} model from {provider} provider is not available. Currently available models are {models.list()}. You may need to update your /etc/model/default to point to an available model."
+
+    assert provider == "openai", f"Only openai provider is supported for now, but {provider} was requested. Please make sure /etc/model/default contains 'openai <model>' and that this provider is available in /models/{provider}/"
+
+    # construct the agent
+    agent = Agent(name=filepath, instructions=system_prompt, tools=[function_tool(t) for t in program.tools], model=model, model_settings=ModelSettings(reasoning={"effort": "minimal"}))
+
+    # actually run the agent
+    await run_streamed_spinner(context, agent, program, filepath, f"{provider} {model}", *args)
+
+
+async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Program, filepath: str, model_configuration: str, *args):
+    # check if background agent
+    is_background = len(args) > 0 and args[-1] == "&"
+    if is_background: 
+        args = args[:-1]
+    
+    # spinner setup
+    spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    spinner_task = None
+
+    async def spin(msg=""):
+        """Show a spinner on stderr until cancelled."""
+        i = 0
+        try:
+            while True:
+                sys.stderr.write(f"\r{spinner_chars[i % len(spinner_chars)]} {msg}")
+                sys.stderr.flush()
+                i += 1
+                await asyncio.sleep(0.08)
+        except asyncio.CancelledError:
+            sys.stderr.write("\r\033[K")
+            sys.stderr.flush()
+
+    async def stop_spinner():
+        nonlocal spinner_task
+        if spinner_task and not spinner_task.done():
+            spinner_task.cancel()
+            try:
+                await spinner_task
+            except asyncio.CancelledError:
+                pass
+        spinner_task = None
+
+    def start_spinner(msg=""):
+        nonlocal spinner_task, is_background
+        if not is_background:
+            spinner_task = asyncio.create_task(spin(msg))
+
+    # output setup
+    def print_output(text="", end="\n", flush=False, file=sys.stdout):
+        if not is_background:
+            print(text, end=end, flush=flush, file=file)
+        else:
+            # for background agents, write output to a file in /var/trajectories/<call_id>.out
+            output_path = f"/var/trajectories/{call_id}.out"
+            context.fs().write(output_path, (text + end).encode(), mode="a")
+
+    # trace file setup
+    call_id = str(uuid.uuid4())
+    trace_path = f"/var/trajectories/{call_id}"
+
+    try:
+        # register in /proc
+        context.register_agent(call_id, filepath, trace_path)
+
+        def trace_write(content: str):
+            context.fs().write(trace_path, content.encode(), mode="a")
+
+        async def agent_task():
+            try:
+                # construct full prompt input
+                args_input = "" if len(args) == 0 else "\n\nExtra Input:\n" + " ".join(args)
+                prompt = "Working Directory: " + context.cwd + "\n\n" + program.prompt + args_input
+
+                # write trace header immediately
+                trace_content = filepath + "\n"
+                trace_content += ".MODEL " + model_configuration + "\n"
+                trace_content += ".SYSTEM_PROMPT\n" + (agent.instructions or "") + "\n"
+                trace_content += ".PROMPT\n" + prompt + "\n"
+                if program.tool_paths:
+                    trace_content += ".TOOLS\n" + "\n".join(program.tool_paths) + "\n"
+                trace_content += ".RESPONSE\n"
+                trace_write(trace_content)
+
+                result = Runner.run_streamed(agent, prompt)
+
+                start_spinner()
+                streaming_text = False
+                tool_names = {}  # item_id -> tool name
+                total_input = 0
+                total_output = 0
+
+                async for event in result.stream_events():
+                    # Handle tool output from RunItemStreamEvent
+                    if isinstance(event, RunItemStreamEvent):
+                        if event.name == "tool_output":
+                            await stop_spinner()
+                            raw_item = event.item.raw_item
+                            full_output = raw_item.get("output", "") if isinstance(raw_item, dict) else str(event.item.output)
+                            full_output = str(full_output)
+                            # trace: full output
+                            call_id_ref = raw_item.get("call_id", "") if isinstance(raw_item, dict) else ""
+                            trace_content += json.dumps({"type": "tool_output", "call_id": call_id_ref, "output": full_output}) + "\n"
+                            trace_write(trace_content)
+                            # display: truncated
+                            display = (full_output if len(full_output) <= 200 else full_output[:200]).replace("\n", "⏎ ") + "..."
+                            print_output(f"  -> {display}", file=sys.stderr)
+                            start_spinner()
+                        continue
+
+                    if not isinstance(event, RawResponsesStreamEvent):
+                        continue
+
+                    raw = event.data
+                    event_type = getattr(raw, "type", None)
+
+                    if event_type == "response.output_text.delta":
+                        if not streaming_text:
+                            streaming_text = True
+                            await stop_spinner()
+                        print_output(raw.delta, end="", flush=True)
+
+                    elif event_type == "response.output_item.added":
+                        # track tool name from the function call item
+                        item = getattr(raw, "item", None)
+                        if item and getattr(item, "type", None) == "function_call":
+                            tool_names[item.id] = item.name
+
+                    elif event_type == "response.function_call_arguments.done":
+                        await stop_spinner()
+                        name = raw.name or tool_names.get(raw.item_id, "?")
+                        print_output(f"[{name}({raw.arguments})]", file=sys.stderr)
+                        # trace: tool call
+                        trace_content += json.dumps({"type": "tool_call", "name": name, "arguments": raw.arguments}) + "\n"
+                        trace_write(trace_content)
+                        start_spinner()
+
+                    elif event_type == "response.output_text.done":
+                        # trace: full message text
+                        trace_content += json.dumps({"type": "message", "text": raw.text}) + "\n"
+                        trace_write(trace_content)
+
+                    elif event_type == "response.output_item.done":
+                        item = getattr(raw, "item", None)
+                        if item and getattr(item, "type", None) == "reasoning":
+                            summary = getattr(item, "summary", [])
+                            trace_content += json.dumps({"type": "reasoning", "summary": summary}) + "\n"
+                            trace_write(trace_content)
+
+                    elif event_type == "response.completed":
+                        usage = getattr(raw.response, "usage", None)
+                        if usage:
+                            total_input += usage.input_tokens
+                            total_output += usage.output_tokens
+                            trace_content += json.dumps({"type": "usage", "input_tokens": total_input, "output_tokens": total_output}) + "\n"
+                            trace_write(trace_content)
+
+                    elif event_type == "response.created" and streaming_text:
+                        # new response cycle after text — agent is doing another turn
+                        streaming_text = False
+                        print_output()  # newline after previous text
+                        start_spinner()
+
+                await stop_spinner()
+                print_output()  # final newline
+
+                # trace: write final usage and completion marker
+                trace_content += ".USAGE\n"
+                trace_content += json.dumps({"input_tokens": total_input, "output_tokens": total_output}) + "\n"
+                trace_content += ".COMPLETED\n"
+                trace_write(trace_content)
+            except Exception as e:
+                await stop_spinner()
+                trace_content += ".ERROR\n" + str(e) + "\n"
+                trace_write(trace_content)
+                print_output(f"Error running program {filepath}: {str(e)}")
+            finally:
+                # unregister from /proc
+                context.unregister_agent(call_id)
+        
+        # create separate task for agent execution
+        task = asyncio.create_task(agent_task())
+
+        if not is_background:
+            # wait for task to complete
+            await task
+        else:
+            # move it to the background
+            context.register_background_task(task)
+    except Exception as e:
+        # make sure to unregister from /proc in case of any setup errors
+        context.unregister_agent(call_id)
+        # re-raise the exception to be handled by the caller
+        raise e
