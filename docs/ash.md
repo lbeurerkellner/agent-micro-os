@@ -53,7 +53,7 @@ Execution stops if any command in the chain fails.
 Commands are resolved by searching the PATH in the following order:
 
 1. **Built-in commands** (under `/sbin/`): Implemented as Python modules in `bin/`
-2. **Starlark scripts** (`.star` files): Executable scripts in PATH directories
+2. **Executable programs**: LLM prompt programs and ash scripts in PATH directories
 3. **Relative paths**: Commands starting with `./` are resolved relative to CWD
 
 ### PATH Environment
@@ -96,7 +96,6 @@ The default PATH includes:
 - **usage** - Display storage usage
 
 ### Advanced Features
-- **star** - Execute Starlark scripts
 - **sandbox** - Launch Docker containers with vault access
 - **claude** - Run Claude Code in a container
 
@@ -204,7 +203,7 @@ cd /home && mkdir backup && cp *.txt backup/
 ```
 
 ### Script Files
-Create executable scripts using **star** (Starlark) or ash commands:
+Create executable ash scripts:
 ```bash
 # backup.ash
 cd /home/data
@@ -241,13 +240,12 @@ Currently, ash does not support environment variables. Configuration is done thr
 | Filesystem | Virtual (SQLite) | Host OS |
 | Versioning | Built-in | Not available |
 | Tab Completion | Yes | Yes |
-| Scripting | Starlark + commands | Bash scripts |
+| Scripting | LLM prompts + commands | Bash scripts |
 | Pipes | Limited | Full support |
 | Environment Vars | No | Yes |
 | Job Control | No | Yes |
 
 ## SEE ALSO
-- **star**(1) - Starlark script executor
 - **sandbox**(1) - Docker container execution
 - **fslog**(1) - Filesystem change log
 - **vim**(1), **edit**(1) - Text editors

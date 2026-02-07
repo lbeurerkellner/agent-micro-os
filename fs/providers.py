@@ -6,7 +6,7 @@ import os
 import termcolor
 
 from fs.overlay import FolderProvider
-from system.tools import TOOLS, tool_description, tool_signature
+from system.tools import tool_description, tool_signature, ToolProvider
 
 # bin/ directory relative to this file's parent (project root)
 _BIN_DIR = Path(__file__).resolve().parent.parent / "bin"
@@ -146,24 +146,28 @@ class ProcProvider(FolderProvider):
         return False
 
 
-class ToolsProvider(FolderProvider):
+class ToolsFolderProvider(FolderProvider):
     """Read-only provider that exposes /tools/ as a folder with available tools.
 
-    Tools are registered in the global TOOLS dictionary.
+    Tools are registered via ToolProvider, which includes both built-in tools and custom .tool files from /bin/.
     """
 
+    def __init__(self, ctx):
+        self._ctx = ctx
+        self.tool_provider = ToolProvider(ctx)
+
     def list(self) -> list[str]:
-        return sorted(TOOLS.keys())
+        return sorted(self.tool_provider.keys())
 
     def read(self, path: str) -> bytes:
         path = path.strip("/")
-        if path not in TOOLS:
+        if path not in self.tool_provider:
             raise FileNotFoundError(f"'{path}' is not a registered tool")
-        return f"{termcolor.colored(tool_signature(TOOLS[path]), 'cyan', attrs=['bold'])}\n\n{tool_description(TOOLS[path])}".encode()
+        return f"{termcolor.colored(tool_signature(self.tool_provider[path]), 'cyan', attrs=['bold'])}\n\n{tool_description(self.tool_provider[path])}".encode()
 
     def exists(self, path: str) -> bool:
         path = path.strip("/")
-        return path in TOOLS
+        return path in self.tool_provider
 
     def is_dir(self, path: str) -> bool:
         path = path.strip("/")

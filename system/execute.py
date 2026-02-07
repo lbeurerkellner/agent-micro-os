@@ -32,14 +32,15 @@ async def execute(ctx, filepath, *args):
         first_line, _, rest = contents.partition('\n')
         shebang = first_line[2:].strip()  # Remove #! and whitespace
 
-        # Check if it's a Starlark script
-        if shebang in ['/sbin/star', '/bin/star', 'star']:
-            # Execute as Starlark script
-            from bin.star import run as star_run
+        # Check if it's an ash script
+        if shebang in ['/sbin/ash', '/bin/ash', 'ash']:
+            # Execute as ash script (line-by-line)
+            from bin.ash import run_script
             try:
-                await star_run("/" + vault_path, *args)
+                # get content, replacing all $@ with the arguments
+                await run_script(rest)
             except Exception as e:
-                print(f"Error running Starlark script {filepath}: {str(e)}")
+                print(f"Error running ash script {filepath}: {str(e)}")
             return
         else:
             print(f"{filepath}: unsupported interpreter: {shebang}")

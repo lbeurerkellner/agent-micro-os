@@ -1,6 +1,6 @@
 # Agent Micro OS
 
-Toy implementation of a micro operating system in which programs are prompts, agents are processes, and the filesystem layer is versioned into an sqlite database for time travel and recovery.
+Toy implementation of a micro operating system in which programs are prompts, agents are processes, and the filesystem layer is a versioned sqlite database for time travel and recovery. 
 
 Start by executing the following command (everything is sandboxed, don't worry about it):
 ```python

@@ -17,7 +17,6 @@ dependencies = [
     "openai-agents>=0.7.0",
     "prompt-toolkit>=3.0.52",
     "pytest-asyncio>=1.3.0",
-    "starlark-go>=1.0.0",
     "termcolor>=3.3.0",
 ]
 

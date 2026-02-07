@@ -9,6 +9,7 @@ import termcolor
 
 from system.context import SystemContext
 from system.execute import execute
+from system.cmdparse import cmdparse
 
 import argparse
 
@@ -44,8 +45,10 @@ async def run_command(user_input: str):
         if not cmd:
             continue
 
-        # Parse command (first word) and arguments
-        parts = cmd.split()
+        # Parse command (first word) and arguments using bash-like tokenizer
+        parts = cmdparse(cmd)
+        if not parts:
+            continue
         command = parts[0]
         args = parts[1:]
 
@@ -322,12 +325,12 @@ async def loop(user: str, fsimage: str, command: str = None, debug: bool = False
     """
     with SystemContext(user=user, fsimage=fsimage, debug=debug) as ctx:
         # Mount built-in commands as /sbin
-        from fs.providers import BinProvider, ModelProvider, ProcProvider, ToolsProvider
+        from fs.providers import BinProvider, ModelProvider, ProcProvider, ToolsFolderProvider
 
         # Mount standard folders
         SystemContext.current().mount("sbin", BinProvider())
         SystemContext.current().mount("models", ModelProvider())
-        SystemContext.current().mount("tools", ToolsProvider())
+        SystemContext.current().mount("tools", ToolsFolderProvider(ctx))
         SystemContext.current().mount("proc", ProcProvider(ctx._agents))
 
         # Non-interactive mode: run single command and exit
@@ -342,7 +345,6 @@ async def loop(user: str, fsimage: str, command: str = None, debug: bool = False
         print()
 
         # Set up tab completion (pass ctx directly since contextvars don't work in executor threads)
-        ctx = SystemContext.current()
         setup_readline(ctx, debug=debug)
 
         # Load command history from vaultfs

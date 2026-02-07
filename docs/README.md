@@ -18,9 +18,6 @@ man
 - **[ash](ash.md)** - Agent Shell, the main interactive shell environment
 - **[man](man.md)** - Display manual pages for commands
 
-### Scripting & Automation
-- **[star](star.md)** - Execute Starlark scripts with vault filesystem access
-
 ### Containerization
 - **[sandbox](sandbox.md)** - Execute commands in Docker containers with vault access
 - **[claude](claude.md)** - Run Claude Code AI assistant in a sandboxed environment
@@ -61,7 +58,6 @@ man
 ### Advanced Features
 | Command | Description |
 |---------|-------------|
-| star | Starlark script executor |
 | sandbox | Docker container integration |
 | claude | AI coding assistant |
 
@@ -81,15 +77,6 @@ Each manual page follows the standard UNIX man page structure:
 10. **BUGS** - How to report issues
 
 ## Quick Start Examples
-
-### Hello World with Star
-```bash
-# Create a Starlark script
-echo 'print("Hello, World!")' > hello.star
-
-# Execute it
-star hello.star
-```
 
 ### Sandbox Development
 ```bash
@@ -185,65 +172,6 @@ Written as part of the agentvault project.
 - Document error messages
 - Provide troubleshooting tips
 
-## Star Command Highlights
-
-The **[star](star.md)** command deserves special attention as it enables powerful scripting capabilities:
-
-### Filesystem Access
-```python
-# Read files
-content = fs['read']("/home/data.txt")
-
-# Write files
-fs['write']("/home/output.txt", "result")
-
-# List directory
-files = fs['list']("/home")
-
-# Check existence
-if fs['exists']("/home/config.json"):
-    config = fs['read']("/home/config.json")
-```
-
-### Shell Integration
-```python
-# Execute shell commands
-output = run_command("ls /home")
-print(output)
-
-# Chain commands
-run_command("mkdir /home/backup && cp /home/*.txt /home/backup/")
-```
-
-### Practical Examples
-
-**Backup Tool:**
-```python
-def backup_txt_files(source_dir, backup_dir):
-    files = fs['list'](source_dir)
-    for filename in files:
-        if filename.endswith(".txt"):
-            content = fs['read'](source_dir + "/" + filename)
-            fs['write'](backup_dir + "/" + filename, content)
-            print("Backed up:", filename)
-
-backup_txt_files("/home/docs", "/home/backup")
-```
-
-**File Statistics:**
-```python
-def analyze_directory(path):
-    files = fs['list'](path)
-    total_size = 0
-    for filename in files:
-        if not fs['is_dir'](path + "/" + filename):
-            content = fs['read'](path + "/" + filename)
-            total_size += len(content)
-    print("Total size:", total_size, "bytes")
-
-analyze_directory("/home/data")
-```
-
 ## Additional Resources
 
 ### Internal
@@ -252,7 +180,6 @@ analyze_directory("/home/data")
 - [TODO.md](../TODO.md) - Project roadmap
 
 ### External
-- [Starlark Language Spec](https://github.com/bazelbuild/starlark)
 - [Docker Documentation](https://docs.docker.com/)
 - [Markdown Guide](https://www.markdownguide.org/)
 

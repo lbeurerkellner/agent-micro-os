@@ -286,7 +286,6 @@ docker build -f sandboxes/Dockerfile.claude .
 ## SEE ALSO
 - **sandbox**(1) - Docker container execution
 - **ash**(1) - Agent shell
-- **star**(1) - Starlark script executor
 
 ## EXTERNAL RESOURCES
 - Claude Code Documentation: https://docs.anthropic.com/claude-code

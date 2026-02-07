@@ -71,7 +71,7 @@ Launch a Python container for running Python scripts.
 
 ### Run Specific Command
 ```bash
-sandbox --cmd "python3 script.py"
+sandbox --cmd "python script.py"
 ```
 Execute a Python script and exit.
 
@@ -305,7 +305,6 @@ sandbox --image postgres:15 --prefix /home/migrations --cmd "
 - **docker**(1) - Docker container runtime
 - **ash**(1) - Agent shell
 - **claude**(1) - Claude Code in sandbox
-- **star**(1) - Starlark script executor
 
 ## AUTHOR
 Written as part of the agentvault project.

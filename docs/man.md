@@ -17,17 +17,17 @@ When invoked without arguments, **man** lists all available manual pages.
 ## ARGUMENTS
 
 *command*
-> Name of the command to display documentation for (e.g., `star`, `ash`, `grep`)
+> Name of the command to display documentation for (e.g., `ash`, `grep`, `sandbox`)
 
 ## BEHAVIOR
 
 ### Display Manual Page
 ```bash
-(/home) > man star
-# star(1) - Starlark Script Executor
+(/home) > man ash
+# ash(1) - Agent Shell
 
 ## NAME
-**star** - Execute Starlark scripts with vault filesystem access
+**ash** - Agent Shell for vault environment
 ...
 ```
 
@@ -42,7 +42,6 @@ Available manual pages:
   ls
   man
   sandbox
-  star
 ```
 
 ### Command Not Found
@@ -55,11 +54,11 @@ Try 'man' without arguments to see available manual pages.
 
 ## EXAMPLES
 
-### View Documentation for Star
+### View Documentation for Sandbox
 ```bash
-(/home) > man star
+(/home) > man sandbox
 ```
-Displays comprehensive documentation about the Starlark script executor.
+Displays comprehensive documentation about Docker container execution.
 
 ### View Documentation for Grep
 ```bash
@@ -78,7 +77,6 @@ Available manual pages:
   ls
   man
   sandbox
-  star
 ```
 
 ### Quick Help
@@ -102,7 +100,6 @@ docs/
 ├── ls.md         # List directory
 ├── man.md        # This page
 ├── sandbox.md    # Docker containers
-└── star.md       # Starlark executor
 ```
 
 ## MANUAL PAGE FORMAT
@@ -188,8 +185,8 @@ command example
 
 ### Learning New Commands
 ```bash
-# Learn about Starlark scripting
-(/home) > man star
+# Learn about sandbox execution
+(/home) > man sandbox
 ```
 
 ### Reference During Development
@@ -265,24 +262,24 @@ doc_path = docs_dir / f"{command}.md"
 ### Paging Long Pages
 ```bash
 # Pipe to less (if available)
-(/home) > man star | less
+(/home) > man ash | less
 
 # Or redirect to file
-(/home) > man star > /tmp/star-docs.txt
-(/home) > cat /tmp/star-docs.txt
+(/home) > man ash > /tmp/ash-docs.txt
+(/home) > cat /tmp/ash-docs.txt
 ```
 
 ### Search Within Page
 ```bash
 # Use grep to find specific content
-(/home) > man star | grep -A 5 "examples"
+(/home) > man ash | grep -A 5 "examples"
 ```
 
 ### Convert to HTML
 ```bash
 # If markdown converter available
-(/home) > man star > star.md
-(/home) > markdown star.md > star.html
+(/home) > man ash > ash.md
+(/home) > markdown ash.md > ash.html
 ```
 
 ## FUTURE ENHANCEMENTS
@@ -321,7 +318,6 @@ When writing manual pages:
 | Command | Description | Key Features |
 |---------|-------------|--------------|
 | ash | Agent Shell | REPL, tab completion |
-| star | Starlark executor | Scripting, automation |
 | sandbox | Docker integration | Isolation, versioning |
 | claude | AI assistant | Code generation |
 | ls | List files | Directory browsing |

@@ -1,4 +1,4 @@
-async def run(*args, env: dict = None, readonly=False):
+async def run(*args, env: dict = None, readonly=False, quiet=False, capture=False):
     """Launch a Docker container with vault contents mounted as a volume.
 
     Usage: sandbox [--image IMAGE] [--prefix PATH] [--cmd CMD] [path]
@@ -44,8 +44,8 @@ async def run(*args, env: dict = None, readonly=False):
             prefix = args[i + 1]
             i += 2
         elif args[i] == "--cmd" and i + 1 < len(args):
-            cmd = args[i + 1]
-            i += 2
+            cmd = ' '.join(args[i + 1:])
+            break
         elif args[i] == "--mount" and i + 1 < len(args):
             mount = args[i + 1]
             i += 2
@@ -63,7 +63,8 @@ async def run(*args, env: dict = None, readonly=False):
 
     # Export
     tar_buf, snapshot = _export_to_tar(vault, prefix, uid=uid, gid=uid)
-    print(f"Exported {len(snapshot)} files")
+    if not quiet:
+        print(f"Exported {len(snapshot)} files")
 
     client = docker.from_env()
     vol_name = f"vault-{uuid.uuid4().hex[:12]}"
@@ -82,10 +83,9 @@ async def run(*args, env: dict = None, readonly=False):
         for k, v in (env or {}).items():
             env_args.extend(["-e", f"{k}={v}"])
 
-        print(env_args)
-
         # Launch container
-        print(f"Launching {image}...")
+        if not quiet:
+            print(f"Launching {image}...")
         docker_args = ["docker", "run", "--rm", "-it",
                         "-v", f"{vol_name}:{mount}", "-w", mount,
                         *env_args,
@@ -94,17 +94,37 @@ async def run(*args, env: dict = None, readonly=False):
             docker_args.extend(["sh", "-c", cmd])
         else:
             docker_args.append("bash")
-        subprocess.run(docker_args)
+
+        # Execute the container
+        if not capture:
+            result = subprocess.run(docker_args)
+            exit_code = result.returncode
+        else:
+            result = subprocess.run(docker_args, capture_output=True, text=True)
+            exit_code = result.returncode
+            output = result.stdout + result.stderr
+            if not quiet:
+                print(output)
 
         # Diff and commit
         current = _read_volume(client, vol_name)
         if readonly:
-            print("Discarding changes (--readonly mode).")
-            return
+            if not quiet:
+                print("Discarding changes (--readonly mode).")
+            if capture:
+                return f"{output}\n[exit code: {exit_code}]"
+            else:
+                return exit_code == 0
         _diff_and_commit(vault, snapshot, current, prefix)
+
+        if capture:
+            return f"{output}\n[exit code: {exit_code}]"
+        else:
+            return exit_code == 0
     finally:
         vol.remove()
-        print(f"Volume {vol_name} removed")
+        if not quiet:
+            print(f"Volume {vol_name} removed")
 
 
 def _export_to_tar(vault, prefix, uid=0, gid=0):

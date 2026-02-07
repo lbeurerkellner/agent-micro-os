@@ -5,7 +5,8 @@ import uuid
 from dataclasses import dataclass, field
 from fs.providers import ModelProvider
 from system.context import SystemContext
-from system.tools import TOOLS
+from system.tools import ToolProvider
+from termcolor import colored
 
 from agents import Runner, Agent, RawResponsesStreamEvent, RunItemStreamEvent, function_tool, ModelSettings
 
@@ -22,6 +23,9 @@ class Program:
 
     # system prompt, if not default
     system_prompt: str | None = None
+
+    # maximum number of turns for the agent to run, default is 10
+    max_turns: int = 10
 
 def parse(contents: str):
     """
@@ -44,6 +48,10 @@ def parse(contents: str):
     tool_paths: list[str] = []
     prompt_lines = []
     section = None
+    
+    max_turns = safe_int(SystemContext.current().read("/etc/model/max_turns", "10"), default=10)
+
+    tool_provider = ToolProvider(SystemContext.current())
 
     assert ".PROMPT" in lines, "Program must contain a .PROMPT section"
 
@@ -65,6 +73,9 @@ def parse(contents: str):
                 line = include_contents.strip()  # replace the include line with the contents of the included file
             except Exception as e:
                 raise ValueError(f"Failed to include file '{include_path}' in program: {str(e)}")
+        elif line.startswith(".MAX_TURNS"):
+            max_turns = safe_int(line[len(".MAX_TURNS"):].strip(), default=10)
+            continue
         
         if section == "system_prompt":
             system_prompt = (system_prompt or "") + line + "\n"
@@ -75,16 +86,22 @@ def parse(contents: str):
             assert tool_name.startswith("/tools/"), f"Tool paths must start with /tools/, but got '{tool_name}'"
             # strp prefix
             tool_name = tool_name[len("/tools/"):]
-            # resolve tools via 'TOOLS'
-            if tool_name in TOOLS:
-                tools.append(TOOLS[tool_name])
+            # resolve tools via tool_provider
+            if tool_name in tool_provider:
+                tools.append(tool_provider[tool_name])
                 tool_paths.append(f"/tools/{tool_name}")
             else:
                 raise ValueError(f"Executable links tool '{tool_name}' which does not exist in /tools/")
 
     
     prompt = "\n".join(prompt_lines).strip()
-    return Program(tools=tools, tool_paths=tool_paths, system_prompt=system_prompt, prompt=prompt)
+    return Program(tools=tools, tool_paths=tool_paths, system_prompt=system_prompt, prompt=prompt, max_turns=max_turns or 10)
+
+def safe_int(value: str, default: int = 0) -> int:
+    try:
+        return int(value)
+    except ValueError:
+        return default
 
 async def run(program: Program, filepath: str, *args):
     models = ModelProvider()
@@ -93,6 +110,7 @@ async def run(program: Program, filepath: str, *args):
 
     # get model configuration
     model_configuration = context.read("/etc/model/default", "openai gpt-5-mini")
+    reasoning_effort = context.read("/etc/model/reasoning_effort", "low")
     
     # get system prompt, if not provided use default
     system_prompt = program.system_prompt or context.read("/etc/AGENTS.md", "You are a helpful assistant.")
@@ -110,7 +128,7 @@ async def run(program: Program, filepath: str, *args):
     assert provider == "openai", f"Only openai provider is supported for now, but {provider} was requested. Please make sure /etc/model/default contains 'openai <model>' and that this provider is available in /models/{provider}/"
 
     # construct the agent
-    agent = Agent(name=filepath, instructions=system_prompt, tools=[function_tool(t) for t in program.tools], model=model, model_settings=ModelSettings(reasoning={"effort": "minimal"}))
+    agent = Agent(name=filepath, instructions=system_prompt, tools=[function_tool(t) for t in program.tools], model=model, model_settings=ModelSettings(reasoning={"effort": reasoning_effort}))
 
     # actually run the agent
     await run_streamed_spinner(context, agent, program, filepath, f"{provider} {model}", *args)
@@ -190,7 +208,7 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
                 trace_content += ".RESPONSE\n"
                 trace_write(trace_content)
 
-                result = Runner.run_streamed(agent, prompt)
+                result = Runner.run_streamed(agent, prompt, max_turns=program.max_turns)
 
                 start_spinner()
                 streaming_text = False
@@ -212,7 +230,7 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
                             trace_write(trace_content)
                             # display: truncated
                             display = (full_output if len(full_output) <= 200 else full_output[:200]).replace("\n", "⏎ ") + "..."
-                            print_output(f"  -> {display}", file=sys.stderr)
+                            print_output(colored(f"  -> {display}", 'dark_grey'), file=sys.stderr)
                             start_spinner()
                         continue
 
@@ -226,6 +244,7 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
                         if not streaming_text:
                             streaming_text = True
                             await stop_spinner()
+                            print_output()  # newline before text response
                         print_output(raw.delta, end="", flush=True)
 
                     elif event_type == "response.output_item.added":
@@ -237,7 +256,8 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
                     elif event_type == "response.function_call_arguments.done":
                         await stop_spinner()
                         name = raw.name or tool_names.get(raw.item_id, "?")
-                        print_output(f"[{name}({raw.arguments})]", file=sys.stderr)
+                        args_display = raw.arguments if len(raw.arguments) <= 200 else raw.arguments[:200] + "..."
+                        print_output(colored(f"[{name}", 'dark_grey', attrs=['bold']) + colored(f"({args_display})]", 'dark_grey'), file=sys.stderr)
                         # trace: tool call
                         trace_content += json.dumps({"type": "tool_call", "name": name, "arguments": raw.arguments}) + "\n"
                         trace_write(trace_content)
