@@ -40,4 +40,4 @@ You can then run your program with the following command:
 Ahoy-hoy, space pickle! 🥒✨ How’s your brainbox buzzing today?
 ```
 
-If you want to learn more about the OS, use the 'man' command to learn about built-in commands. Use 'top' to observe currently active agents, use 'usage' to see how many agents have run, and how many tokens they have used in the last 24h.
+If you want to learn more about the OS, use the 'man' command to learn about built-in commands and explore `/sbin`. Use 'top' to observe currently active agents, use 'usage' to see how many agents have run, and how many tokens they have used in the last 24h.
