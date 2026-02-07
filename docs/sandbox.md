@@ -304,7 +304,6 @@ sandbox --image postgres:15 --prefix /home/migrations --cmd "
 ## SEE ALSO
 - **docker**(1) - Docker container runtime
 - **ash**(1) - Agent shell
-- **claude**(1) - Claude Code in sandbox
 
 ## AUTHOR
 Written as part of the agentvault project.

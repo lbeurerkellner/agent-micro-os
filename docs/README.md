@@ -20,7 +20,6 @@ man
 
 ### Containerization
 - **[sandbox](sandbox.md)** - Execute commands in Docker containers with vault access
-- **[claude](claude.md)** - Run Claude Code AI assistant in a sandboxed environment
 
 ### File Operations
 - **[ls](ls.md)** - List directory contents
@@ -59,7 +58,6 @@ man
 | Command | Description |
 |---------|-------------|
 | sandbox | Docker container integration |
-| claude | AI coding assistant |
 
 ## Documentation Format
 

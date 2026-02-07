@@ -28,7 +28,7 @@ The [sandbox](bin/sandbox.py) launches Docker containers with vault contents mou
 - File operations: `cat`, `ls`, `cp`, `mv`, `rm`, `edit`
 - Search: `find`, `grep`, `fslog`
 - System: `cd`, `clear`, `exit`, `sleep`, `watch`, `top`
-- Execution: `ash` (shell), `sandbox`, `claude`
+- Execution: `ash` (shell), `sandbox`
 
 Commands are resolved via the system `PATH` ([/sbin, /bin]) and executed by the [execute](system/execute.py) module.
 

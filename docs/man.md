@@ -37,7 +37,6 @@ When invoked without arguments, **man** lists all available manual pages.
 Available manual pages:
   ash
   cat
-  claude
   grep
   ls
   man
@@ -72,7 +71,6 @@ Shows detailed grep command usage, options, and examples.
 Available manual pages:
   ash
   cat
-  claude
   grep
   ls
   man
@@ -95,7 +93,6 @@ Manual pages are organized in the `docs/` directory:
 docs/
 ├── ash.md        # Agent Shell
 ├── cat.md        # Concatenate files
-├── claude.md     # Claude Code integration
 ├── grep.md       # Search files
 ├── ls.md         # List directory
 ├── man.md        # This page
@@ -319,7 +316,6 @@ When writing manual pages:
 |---------|-------------|--------------|
 | ash | Agent Shell | REPL, tab completion |
 | sandbox | Docker integration | Isolation, versioning |
-| claude | AI assistant | Code generation |
 | ls | List files | Directory browsing |
 | cat | Display files | File viewing |
 | grep | Search files | Pattern matching |

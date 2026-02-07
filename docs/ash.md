@@ -97,7 +97,6 @@ The default PATH includes:
 
 ### Advanced Features
 - **sandbox** - Launch Docker containers with vault access
-- **claude** - Run Claude Code in a container
 
 ## VIRTUAL FILESYSTEM
 
