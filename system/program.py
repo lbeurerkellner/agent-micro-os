@@ -121,6 +121,15 @@ async def run(program: Program, filepath: str, *args):
     except ValueError:
         provider, model = "openai", "gpt-5-mini"
 
+    # if model is 'auto', use the first available model from the provider
+    if model == "auto":
+        for m in models.list():
+            if m.startswith(provider + "/"):
+                model = m[len(provider) + 1:]
+                break
+    if model == "auto":
+        raise ValueError(f"No available models found for provider '{provider}' in /models/, but 'auto' was specified. Please make sure there is at least one model available for this provider in /models/ or specify a model explicitly in /etc/model/default")
+
     # ensure model and provider are available
     assert models.has_provider(provider), f"{provider} provider is not available. Please make sure /etc/model/default points to a model that is currently available (/models/<provider>/<model>)"
     assert models.has_model(provider, model), f"{model} model from {provider} provider is not available. Currently available models are {models.list()}. You may need to update your /etc/model/default to point to an available model."

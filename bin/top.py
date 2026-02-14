@@ -107,10 +107,45 @@ def collect_processes(vault) -> list[dict]:
     return processes
 
 
-def format_table(processes: list[dict]) -> str:
-    """Format processes into a table string."""
+def format_usage_header(stats: dict) -> list[tuple[str, str]]:
+    """Format system-wide usage stats as formatted text tuples with bold labels."""
+    total_in = stats["input_tokens"]
+    total_out = stats["output_tokens"]
+    total = total_in + total_out
+
+    sessions = stats["sessions"]
+
+    parts = []
+    if stats["completed"]:
+        parts.append(f"{stats['completed']} completed")
+    if stats["errors"]:
+        parts.append(f"{stats['errors']} errors")
+    in_progress = sessions - stats["completed"] - stats["errors"]
+    if in_progress:
+        parts.append(f"{in_progress} in progress")
+
+    detail = f" ({', '.join(parts)})" if parts else ""
+
+    ft: list[tuple[str, str]] = []
+    ft.append(("bold", "Usage: "))
+    ft.append(("", f"{total:,} tokens ({total_in:,} in / {total_out:,} out) "))
+    ft.append(("bold", "Sessions: "))
+    ft.append(("", f"{sessions}{detail}\n"))
+
+    if stats["models"]:
+        sorted_models = sorted(stats["models"].items(), key=lambda x: -x[1])
+        max_name = max(len(m) for m, _ in sorted_models)
+        for model, count in sorted_models:
+            padded = model.ljust(max_name)
+            ft.append(("", f"  {padded} | {count} session{'s' if count != 1 else ''}\n"))
+
+    return ft
+
+
+def format_table(processes: list[dict]) -> list[tuple[str, str]]:
+    """Format processes into formatted text tuples."""
     if not processes:
-        return "No active agents."
+        return [("", "No active agents.")]
 
     # Column definitions: (header, key, width, align)
     cols = [
@@ -151,7 +186,12 @@ def format_table(processes: list[dict]) -> str:
         rows.append("  ".join(parts))
 
     sep = "-" * len(header)
-    return "\n".join([header, sep] + rows)
+    ft: list[tuple[str, str]] = []
+    ft.append(("bold", header + "\n"))
+    ft.append(("", sep + "\n"))
+    for row in rows:
+        ft.append(("", row + "\n"))
+    return ft
 
 
 async def run(*args):
@@ -167,17 +207,20 @@ async def run(*args):
     vault = ctx.fs()
 
     # State for the display
-    state = {"text": "Loading..."}
+    state = {"text": [("", "Loading...")]}
 
     def get_display_text():
+        from datetime import timedelta
+        from bin.usage import collect_usage
+
         procs = collect_processes(vault)
-        count = len(procs)
-        lines = [
-            f"Active Agents: {count}",
-            "",
-            format_table(procs),
-        ]
-        return "\n".join(lines)
+        stats = collect_usage(vault, timedelta(hours=24))
+
+        ft: list[tuple[str, str]] = []
+        ft.extend(format_usage_header(stats))
+        ft.append(("", "\n"))
+        ft.extend(format_table(procs))
+        return ft
 
     # Key bindings
     kb = KeyBindings()
