@@ -368,7 +368,9 @@ async def loop(user: str, fsimage: str, command: str = None, debug: bool = False
         try:
             while True:
                 ctx = SystemContext.current()
-                prompt = termcolor.colored(f"({ctx.cwd}) > ", "green", attrs=["bold"])
+                # Wrap ANSI codes with \001/\002 so readline calculates prompt width correctly
+                text = f"({ctx.cwd}) > "
+                prompt = f"\001\033[1;32m\002{text}\001\033[0m\002"
 
                 input_task = asyncio.ensure_future(
                     ev_loop.run_in_executor(None, input, prompt)

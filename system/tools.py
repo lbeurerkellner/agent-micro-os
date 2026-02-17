@@ -202,6 +202,11 @@ class ToolProvider:
         custom_tools = self._load_custom_tools()
         return key in custom_tools
 
+    def list(self):
+        """List all available tools (built-in and custom)"""
+        custom_tools = self._load_custom_tools()
+        return list(TOOLS.keys()) + list(custom_tools.keys())
+
     def __getitem__(self, key):
         """Get a tool by name"""
         if key in TOOLS:

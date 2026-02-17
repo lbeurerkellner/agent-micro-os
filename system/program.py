@@ -86,6 +86,12 @@ def parse(contents: str):
             assert tool_name.startswith("/tools/"), f"Tool paths must start with /tools/, but got '{tool_name}'"
             # strp prefix
             tool_name = tool_name[len("/tools/"):]
+            # support '*' wildcard to include all tools from the provider
+            if tool_name == "*":
+                for tool_name in tool_provider.list():
+                    tools.append(tool_provider[tool_name])
+                    tool_paths.append(f"/tools/{tool_name}")
+
             # resolve tools via tool_provider
             if tool_name in tool_provider:
                 tools.append(tool_provider[tool_name])
@@ -93,6 +99,8 @@ def parse(contents: str):
             else:
                 raise ValueError(f"Executable links tool '{tool_name}' which does not exist in /tools/")
 
+    # deduplicate tools
+    tools = list(dict.fromkeys(tools))
     
     prompt = "\n".join(prompt_lines).strip()
     return Program(tools=tools, tool_paths=tool_paths, system_prompt=system_prompt, prompt=prompt, max_turns=max_turns or 10)
