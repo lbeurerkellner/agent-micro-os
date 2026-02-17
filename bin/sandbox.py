@@ -131,9 +131,10 @@ def _export_to_tar(vault, prefix, uid=0, gid=0):
     import io
     import tarfile
 
-    all_files = vault.list()
-    if prefix:
-        pfx = prefix.strip("/") + "/"
+    search_prefix = prefix.strip("/") if prefix else ""
+    all_files = vault.list(prefix=search_prefix)
+    if search_prefix:
+        pfx = search_prefix + "/"
         files = [f for f in all_files if f.startswith(pfx)]
     else:
         pfx = ""

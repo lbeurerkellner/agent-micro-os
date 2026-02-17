@@ -134,7 +134,7 @@ def collect_active_agents(vault) -> list[dict]:
     """
     agents = []
     try:
-        files = vault.list()
+        files = vault.list(prefix="proc")
     except Exception:
         return agents
 

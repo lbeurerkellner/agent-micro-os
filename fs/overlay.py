@@ -17,10 +17,12 @@ class FolderProvider(ABC):
     """
 
     @abstractmethod
-    def list(self) -> list[str]:
-        """List all file paths provided by this provider.
+    def list(self, prefix: str = "") -> list[str]:
+        """List file paths provided by this provider.
 
         Returns paths relative to the mount point, e.g. ["file.txt", "sub/file.txt"].
+
+        :param prefix: If non-empty, only return paths that start with this prefix.
         """
         ...
 
@@ -89,24 +91,58 @@ class OverlayFS:
 
     # --- Vault-compatible interface ---
 
-    def list(self, sort_by_recent: bool = False) -> list[str]:
-        files = self._vault.list(sort_by_recent=sort_by_recent)
+    def list(self, sort_by_recent: bool = False, prefix: str = "") -> list[str]:
+        prefix = prefix.strip("/")
+        files = self._vault.list(sort_by_recent=sort_by_recent, prefix=prefix)
         for mount_point, provider in self._mounts.items():
-            for rel_path in provider.list():
-                files.append(mount_point + "/" + rel_path.strip("/"))
+            if prefix:
+                if mount_point.startswith(prefix):
+                    # prefix is an ancestor of mount — include all provider files
+                    for rel_path in provider.list():
+                        files.append(mount_point + "/" + rel_path.strip("/"))
+                elif prefix.startswith(mount_point + "/"):
+                    # prefix is inside the mount — pass sub-prefix to provider
+                    sub_prefix = prefix[len(mount_point) + 1:]
+                    for rel_path in provider.list(prefix=sub_prefix):
+                        files.append(mount_point + "/" + rel_path.strip("/"))
+                elif prefix == mount_point:
+                    for rel_path in provider.list():
+                        files.append(mount_point + "/" + rel_path.strip("/"))
+                # else: prefix doesn't overlap with mount — skip
+            else:
+                for rel_path in provider.list():
+                    files.append(mount_point + "/" + rel_path.strip("/"))
         return files
 
-    def list_with_metadata(self, sort_by_recent: bool = False):
+    def list_with_metadata(self, sort_by_recent: bool = False, prefix: str = ""):
         from fs.vault import FileMeta
-        results = self._vault.list_with_metadata(sort_by_recent=sort_by_recent)
+        prefix = prefix.strip("/")
+        results = self._vault.list_with_metadata(sort_by_recent=sort_by_recent, prefix=prefix)
         for mount_point, provider in self._mounts.items():
-            for rel_path in provider.list():
-                results.append(FileMeta(
-                    filepath=mount_point + "/" + rel_path.strip("/"),
-                    timestamp=None,
-                    author=None,
-                    size=None,
-                ))
+            if prefix:
+                if mount_point.startswith(prefix):
+                    provider_prefix = ""
+                elif prefix.startswith(mount_point + "/"):
+                    provider_prefix = prefix[len(mount_point) + 1:]
+                elif prefix == mount_point:
+                    provider_prefix = ""
+                else:
+                    continue
+                for rel_path in provider.list(prefix=provider_prefix):
+                    results.append(FileMeta(
+                        filepath=mount_point + "/" + rel_path.strip("/"),
+                        timestamp=None,
+                        author=None,
+                        size=None,
+                    ))
+            else:
+                for rel_path in provider.list():
+                    results.append(FileMeta(
+                        filepath=mount_point + "/" + rel_path.strip("/"),
+                        timestamp=None,
+                        author=None,
+                        size=None,
+                    ))
         return results
 
     def read(self, filepath: str) -> bytes:

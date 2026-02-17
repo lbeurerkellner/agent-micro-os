@@ -9,9 +9,6 @@ def _list_directory(vault, path: str) -> list[str]:
     :param path: The directory path to list (e.g., '/', '/docs', '/docs/reports')
     :return: List of file and directory names (not full paths)
     """
-    # Get all files from the vault
-    files = vault.list()
-
     # Normalize the path for comparison
     if path == '/' or path == '':
         prefix = ''
@@ -19,6 +16,9 @@ def _list_directory(vault, path: str) -> list[str]:
         # Remove leading slash if present, add trailing slash
         path = path.lstrip('/')
         prefix = path + '/'
+
+    # Get files from the vault, filtered by prefix
+    files = vault.list(prefix=path.lstrip('/') if path not in ('/', '') else '')
 
     # Find direct children (files and dirs)
     entries = []
@@ -63,15 +63,15 @@ def _list_directory_with_timestamps(vault, path: str) -> list[tuple[str, str | N
     :param path: The directory path to list
     :return: Sorted list of (name, timestamp) tuples. Directories have None timestamp.
     """
-    metas = vault.list_with_metadata()
-    # Build lookup from full filepath to timestamp
-    ts_by_path = {m.filepath: m.timestamp for m in metas}
-
     if path == '/' or path == '':
         prefix = ''
     else:
         path = path.lstrip('/')
         prefix = path + '/'
+
+    metas = vault.list_with_metadata(prefix=path.lstrip('/') if path not in ('/', '') else '')
+    # Build lookup from full filepath to timestamp
+    ts_by_path = {m.filepath: m.timestamp for m in metas}
 
     entries = []
     seen = set()
@@ -101,8 +101,18 @@ def _list_directory_with_timestamps(vault, path: str) -> list[tuple[str, str | N
     return sorted(entries, key=lambda e: (e[1] is not None, e[1] or ''), reverse=True)
 
 
+_USAGE = """\
+ls - List files and directories
+
+Usage: ls [-t] [-h] [DIRECTORY]
+
+Options:
+  -t    Show timestamps (most recent first)
+  -h    Show this help message"""
+
+
 async def run(*args):
-    """List files in the current directory."""
+    """List files and directories."""
     from system.context import SystemContext
 
     ctx = SystemContext.current()
@@ -114,16 +124,20 @@ async def run(*args):
     show_timestamps = False
     positional = []
     for arg in args:
-        if arg == '-t':
+        if arg == '-h':
+            print(_USAGE)
+            return
+        elif arg == '-t':
             show_timestamps = True
         elif arg.startswith('-'):
             print(f"ls: unknown option: {arg}")
+            print(_USAGE)
             return
         else:
             positional.append(arg)
 
     if len(positional) > 1:
-        print("Usage: ls [-t] [DIRECTORY]")
+        print(_USAGE)
         return
 
     vault = ctx.fs()

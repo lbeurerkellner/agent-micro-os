@@ -190,12 +190,13 @@ def _compile_pattern(opts: GrepOptions) -> re.Pattern:
 
 def _collect_files_recursive(vault, path: str) -> list[str]:
     """Return all file vault-paths under *path*, sorted."""
-    files = vault.list()
     if path == "/" or path == "":
-        prefix = ""
+        search_prefix = ""
     else:
-        path = path.lstrip("/")
-        prefix = path + "/"
+        search_prefix = path.lstrip("/")
+
+    files = vault.list(prefix=search_prefix)
+    prefix = (search_prefix + "/") if search_prefix else ""
 
     result = []
     for fp in files:

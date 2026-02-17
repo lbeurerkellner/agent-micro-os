@@ -8,20 +8,19 @@ def _find_files(vault, path: str) -> list[str]:
     :param path: The directory path to search under (e.g., '/', '/docs')
     :return: Sorted list of file paths (relative to vault root, no leading slash)
     """
-    files = vault.list()
-
     if path == '/' or path == '':
-        prefix = ''
+        search_prefix = ''
     else:
-        path = path.lstrip('/')
-        prefix = path + '/'
+        search_prefix = path.lstrip('/')
+
+    files = vault.list(prefix=search_prefix)
+    prefix = (search_prefix + '/') if search_prefix else ''
 
     result = []
     for filepath in files:
         filepath = filepath.lstrip('/')
-        if prefix:
-            if not filepath.startswith(prefix):
-                continue
+        if prefix and not filepath.startswith(prefix):
+            continue
         result.append(filepath)
 
     return sorted(result)

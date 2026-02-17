@@ -272,40 +272,48 @@ class Vault:
 
         return False
 
-    def list(self, sort_by_recent: bool = False) -> list[str]:
-        """List all files in the vault for the current user.
+    def list(self, sort_by_recent: bool = False, prefix: str = "") -> list[str]:
+        """List files in the vault for the current user.
 
         :param sort_by_recent: If True, sort by most recently updated first
+        :param prefix: If non-empty, only return paths starting with this prefix
         :return: A list of file paths
         """
+        prefix = prefix.strip("/")
         conn = sqlite3.connect(self.filename)
         cursor = conn.cursor()
 
+        # Build optional prefix filter
+        prefix_clause = ""
+        params: list = [self.user]
+        if prefix:
+            prefix_clause = " AND filepath LIKE ?"
+            params.append(prefix + "%")
+
         if sort_by_recent:
-            # Use a subquery to get the latest version for each file
-            # Order by both timestamp and id to handle same-second writes
-            # Exclude files whose latest version is a tombstone
+            params_inner = [self.user]
+            if prefix:
+                params_inner.append(prefix + "%")
             cursor.execute(
-                """SELECT filepath
+                f"""SELECT filepath
                    FROM versions
-                   WHERE user = ? AND hash != 'tombstone' AND (filepath, id) IN (
+                   WHERE user = ? AND hash != 'tombstone'{prefix_clause} AND (filepath, id) IN (
                        SELECT filepath, MAX(id)
                        FROM versions
-                       WHERE user = ?
+                       WHERE user = ?{prefix_clause}
                        GROUP BY filepath
                    )
                    ORDER BY timestamp DESC, id DESC""",
-                (self.user, self.user)
+                params + params_inner
             )
             files = [row[0].lstrip('/') for row in cursor.fetchall()]
         else:
-            # Get distinct filepaths where the latest version is not a tombstone
             cursor.execute(
-                """SELECT DISTINCT filepath FROM versions v1
-                   WHERE user = ? AND hash != 'tombstone'
+                f"""SELECT DISTINCT filepath FROM versions v1
+                   WHERE user = ? AND hash != 'tombstone'{prefix_clause}
                    AND id = (SELECT MAX(id) FROM versions v2
                             WHERE v2.user = v1.user AND v2.filepath = v1.filepath)""",
-                (self.user,)
+                params
             )
             files = [row[0].lstrip('/') for row in cursor.fetchall()]
 
@@ -313,44 +321,51 @@ class Vault:
 
         # If in a commit, apply pending operations (read-your-own-writes)
         if self._current_commit_id is not None:
-            # Convert to set for easier manipulation
             files_set = set(files)
 
-            # Add files from pending writes
-            files_set.update(self._pending_writes.keys())
+            prefix_filter = (prefix + "/") if prefix else ""
+            pending_keys = self._pending_writes.keys()
+            if prefix_filter:
+                pending_keys = [k for k in pending_keys if k.startswith(prefix_filter) or k == prefix]
 
-            # Remove files from pending deletes
+            files_set.update(pending_keys)
             files_set.difference_update(self._pending_deletes)
 
             files = list(files_set)
 
-            # If sort_by_recent was requested, we can't maintain perfect order
-            # for pending writes, but we can put them first
             if sort_by_recent:
-                pending_files = [f for f in self._pending_writes.keys() if f not in self._pending_deletes]
+                pending_files = [f for f in pending_keys if f not in self._pending_deletes]
                 db_files = [f for f in files if f not in pending_files]
                 files = pending_files + db_files
 
         return files
 
-    def list_with_metadata(self, sort_by_recent: bool = False) -> list[FileMeta]:
-        """List all files with metadata in a single query.
+    def list_with_metadata(self, sort_by_recent: bool = False, prefix: str = "") -> list[FileMeta]:
+        """List files with metadata in a single query.
 
         :param sort_by_recent: If True, sort by most recently updated first
+        :param prefix: If non-empty, only return paths starting with this prefix
         :return: A list of FileMeta objects
         """
+        prefix = prefix.strip("/")
         conn = sqlite3.connect(self.filename)
         cursor = conn.cursor()
+
+        prefix_clause = ""
+        params: list = [self.user]
+        if prefix:
+            prefix_clause = " AND filepath LIKE ?"
+            params.append(prefix + "%")
 
         order = "ORDER BY timestamp DESC, id DESC" if sort_by_recent else ""
         cursor.execute(
             f"""SELECT filepath, timestamp, author, LENGTH(content)
                 FROM versions v1
-                WHERE user = ? AND hash != 'tombstone'
+                WHERE user = ? AND hash != 'tombstone'{prefix_clause}
                 AND id = (SELECT MAX(id) FROM versions v2
                          WHERE v2.user = v1.user AND v2.filepath = v1.filepath)
                 {order}""",
-            (self.user,)
+            params
         )
 
         results = []
@@ -373,8 +388,11 @@ class Vault:
             results = [m for m in results if m.filepath not in self._pending_deletes]
 
             # Add/replace entries for pending writes
+            prefix_filter = (prefix + "/") if prefix else ""
             for filepath, (content, author, _) in self._pending_writes.items():
                 if filepath in self._pending_deletes:
+                    continue
+                if prefix_filter and not (filepath.startswith(prefix_filter) or filepath == prefix):
                     continue
                 # Remove existing DB entry if overwritten
                 results = [m for m in results if m.filepath != filepath]

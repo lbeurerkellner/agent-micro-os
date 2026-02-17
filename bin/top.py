@@ -64,7 +64,7 @@ def collect_processes(vault) -> list[dict]:
     """Collect active agent process info from /proc and their trajectories."""
     processes = []
     try:
-        files = vault.list()
+        files = vault.list(prefix="proc")
     except Exception:
         return processes
 

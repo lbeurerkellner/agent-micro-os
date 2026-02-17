@@ -1,3 +1,12 @@
+_USAGE = """\
+cat - Display file contents
+
+Usage: cat [-h] FILE [FILE ...]
+
+Options:
+  -h    Show this help message"""
+
+
 async def run(*args):
     """Display file contents."""
     from system.context import SystemContext
@@ -8,8 +17,8 @@ async def run(*args):
         print("No context found. Please run this command within a SystemContext.")
         return
 
-    if len(args) == 0:
-        print("Usage: cat <file> [file2 ...]")
+    if not args or args[0] == '-h':
+        print(_USAGE)
         return
 
     vault = ctx.fs()

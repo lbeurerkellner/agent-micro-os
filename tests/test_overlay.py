@@ -13,7 +13,9 @@ class DictProvider(FolderProvider):
     def __init__(self, files: dict[str, bytes]):
         self._files = files
 
-    def list(self) -> list[str]:
+    def list(self, prefix: str = "") -> list[str]:
+        if prefix:
+            return [k for k in self._files if k.startswith(prefix)]
         return list(self._files.keys())
 
     def read(self, path: str) -> bytes:

@@ -108,17 +108,16 @@ async def run_command(user_input: str):
     return True
 
 
-def get_available_commands():
+def get_available_commands(ctx):
     """Get list of available commands from PATH directories on the VFS."""
-    ctx = SystemContext.current()
     if not ctx:
         return ["exit"]
     vfs = ctx.fs()
     commands = set()
-    all_files = vfs.list()
     for path_dir in ctx.path:
-        prefix = path_dir.strip('/') + '/'
-        for filepath in all_files:
+        path_prefix = path_dir.strip('/')
+        prefix = path_prefix + '/'
+        for filepath in vfs.list(prefix=path_prefix):
             filepath = filepath.strip('/')
             if filepath.startswith(prefix):
                 rel = filepath[len(prefix):]
@@ -159,12 +158,12 @@ def get_path_completions(text: str, cwd: str, vault):
         current_dir = base_dir.lstrip('/') if base_dir != '/' else ''
         file_part = search_path
 
-    # Get all files from vault
-    all_files = vault.list()
+    # Get files from vault filtered to current directory
+    prefix = current_dir + '/' if current_dir else ''
+    all_files = vault.list(prefix=current_dir)
 
     # Build set of entries in the target directory
     entries = set()
-    prefix = current_dir + '/' if current_dir else ''
 
     for filepath in all_files:
         filepath = filepath.lstrip('/')
@@ -231,7 +230,7 @@ def create_completer(ctx, debug=False):
                 # Determine if we're completing a command or a path
                 if begin_idx == 0:
                     # Completing command name
-                    commands = get_available_commands()
+                    commands = get_available_commands(ctx)
                     matches = [cmd for cmd in commands if cmd.startswith(text)]
                 else:
                     # Completing file/directory path

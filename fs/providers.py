@@ -30,7 +30,9 @@ class BinProvider(FolderProvider):
             commands.append(f.stem)
         return sorted(commands)
 
-    def list(self) -> list[str]:
+    def list(self, prefix: str = "") -> list[str]:
+        if prefix:
+            return [c for c in self._commands if c.startswith(prefix)]
         return list(self._commands)
 
     def read(self, path: str) -> bytes:
@@ -74,11 +76,13 @@ class ModelProvider(FolderProvider):
 
         return providers
 
-    def list(self) -> list[str]:
+    def list(self, prefix: str = "") -> list[str]:
         paths = []
         for provider, models in self._providers.items():
             for model in models:
-                paths.append(f"{provider}/{model}")
+                p = f"{provider}/{model}"
+                if not prefix or p.startswith(prefix):
+                    paths.append(p)
         return sorted(paths)
 
     def read(self, path: str) -> bytes:
@@ -123,7 +127,9 @@ class ProcProvider(FolderProvider):
     def __init__(self, agents: dict):
         self._agents = agents
 
-    def list(self) -> list[str]:
+    def list(self, prefix: str = "") -> list[str]:
+        if prefix:
+            return [k for k in self._agents if k.startswith(prefix)]
         return list(self._agents.keys())
 
     def read(self, path: str) -> bytes:
@@ -156,7 +162,9 @@ class ToolsFolderProvider(FolderProvider):
         self._ctx = ctx
         self.tool_provider = ToolProvider(ctx)
 
-    def list(self) -> list[str]:
+    def list(self, prefix: str = "") -> list[str]:
+        if prefix:
+            return sorted(k for k in self.tool_provider.keys() if k.startswith(prefix))
         return sorted(self.tool_provider.keys())
 
     def read(self, path: str) -> bytes:

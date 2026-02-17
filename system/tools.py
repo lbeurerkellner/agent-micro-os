@@ -1,18 +1,94 @@
 from system.context import SystemContext
 import textwrap
 from contextlib import redirect_stdout, redirect_stderr
+from pathlib import Path
+import importlib
+import io
+import shlex
 
 # static built-in tools
 TOOLS = {}
+
+# bin/ directory (project root / bin)
+_BIN_DIR = Path(__file__).resolve().parent.parent / "bin"
+
+# Commands to skip when auto-discovering bin/ tools
+# (interactive, internal, or already exposed differently)
+_SKIP_COMMANDS = {"__init__", "ash", "edit", "vim"}
+
+
+def _discover_bin_tools():
+    """Scan bin/*.py for modules with _USAGE and register them as tools."""
+    for pyfile in sorted(_BIN_DIR.glob("*.py")):
+        name = pyfile.stem
+        if name in _SKIP_COMMANDS:
+            continue
+
+        # Try to import and check for _USAGE
+        module_name = f"bin.{name}"
+        try:
+            mod = importlib.import_module(module_name)
+        except Exception:
+            continue
+
+        usage = getattr(mod, "_USAGE", None)
+        if not usage:
+            continue
+
+        run_fn = getattr(mod, "run", None)
+        if not run_fn:
+            continue
+
+        # Extract description from first line: "name - Description"
+        first_line = usage.strip().splitlines()[0]
+        remainder = usage.strip()[len(first_line):].strip()
+        if " - " in first_line:
+            description = first_line.split(" - ", 1)[1]
+        else:
+            description = first_line
+
+        # Create the tool wrapper
+        _register_bin_tool(name, description.strip() + "\n\n" + remainder, run_fn)
+
+
+def _register_bin_tool(name, description, run_fn):
+    """Register a bin/ command as a tool with signature cmd(args: str) -> str."""
+
+    async def _tool_wrapper(args: str = "") -> str:
+        parsed_args = shlex.split(args) if args.strip() else []
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            try:
+                result = await run_fn(*parsed_args)
+            except Exception as e:
+                return f"Error: {e}"
+        output = stdout.getvalue()
+        err_output = stderr.getvalue()
+        if err_output:
+            output += err_output
+        if result is not None:
+            output += str(result)
+        return output.strip()
+
+    _tool_wrapper.__name__ = name
+    _tool_wrapper.__qualname__ = name
+    _tool_wrapper.__doc__ = description
+    TOOLS[name] = _tool_wrapper
+
 
 class ToolProvider:
     """Provides access to both built-in tools and custom .tool files from /bin/"""
 
     def __init__(self, ctx: SystemContext):
         self.ctx = ctx
+        self.custom_tools_cache = None  # Cache for custom tools to avoid repeated vault access
 
     def _load_custom_tools(self):
         """Load .tool files from /bin/ directory (real-time, not cached)"""
+        if self.custom_tools_cache is not None:
+            return self.custom_tools_cache
+
         custom_tools = {}
         try:
             from fs.vault import Vault
@@ -22,14 +98,15 @@ class ToolProvider:
 
             # List all files in vault and filter for .tool files in bin/
             try:
-                all_files = vault.list()
-                bin_tools = [f for f in all_files if f.startswith("bin/") and f.endswith(".tool")]
+                all_files = vault.list(prefix="bin")
+                bin_tools = [f for f in all_files if f.startswith("bin/")]
 
                 for filepath in bin_tools:
-                    # Extract tool name from bin/name.tool
-                    tool_name = filepath[4:-5]  # Remove "bin/" prefix and ".tool" suffix
+                    # Extract tool name from bin/name
+                    tool_name = filepath[4:]
                     try:
-                        custom_tools[tool_name] = self._create_tool_wrapper(tool_name)
+                        if tool := self._create_tool_wrapper(tool_name):
+                            custom_tools[tool_name] = tool
                     except Exception as e:
                         print(f"Warning: Failed to load tool {tool_name}: {e}")
             except Exception:
@@ -38,13 +115,15 @@ class ToolProvider:
         except Exception as e:
             print(f"Warning: Failed to load custom tools: {e}")
 
+        # cache the loaded tools
+        self.custom_tools_cache = custom_tools
+
         return custom_tools
 
     def _parse_tool_file(self, content):
         """Parse a .tool file structure"""
         lines = content.splitlines()
         description = []
-        arguments = []
         implementation = []
         section = None
 
@@ -52,14 +131,6 @@ class ToolProvider:
             stripped = line.strip()
             if stripped == ".DESCRIPTION":
                 section = "description"
-                continue
-            elif stripped.startswith(".ARGUMENT"):
-                # Parse .ARGUMENT name type
-                parts = stripped.split()
-                if len(parts) >= 3:
-                    arg_name = parts[1]
-                    arg_type = parts[2]
-                    arguments.append({'name': arg_name, 'type': arg_type})
                 continue
             elif stripped == ".IMPL":
                 section = "implementation"
@@ -72,7 +143,6 @@ class ToolProvider:
 
         return {
             'description': '\n'.join(description).strip(),
-            'arguments': arguments,
             'implementation': '\n'.join(implementation).strip()
         }
 
@@ -81,21 +151,15 @@ class ToolProvider:
         fs = self.ctx.fs()
 
         # Read and parse the .tool file
-        content = fs.read(f"bin/{tool_name}.tool").decode('utf-8')
+        content = fs.read(f"bin/{tool_name}").decode('utf-8')
+        if ".DESCRIPTION" not in content:
+            return None
         parsed = self._parse_tool_file(content)
 
-        # Build function signature string
-        params = []
-        for arg in parsed['arguments']:
-            params.append(f"{arg['name']}: {arg['type']}")
-
-        params_str = ', '.join(params)
-        param_names = [arg['name'] for arg in parsed['arguments']]
-
         # Create the wrapper function dynamically using exec
-        func_code = f'''async def {tool_name}({params_str}) -> str:
+        func_code = f'''async def {tool_name}(args: str = "") -> str:
     """{parsed['description']}"""
-    return await _execute_tool({repr(tool_name)}, {repr(parsed)}, {repr(param_names)}, locals())
+    return await _execute_tool({repr(tool_name)}, {repr(parsed)}, args)
 '''
 
         namespace = {'_execute_tool': self._execute_custom_tool}
@@ -104,41 +168,26 @@ class ToolProvider:
 
         return func
 
-    async def _execute_custom_tool(self, tool_name, parsed, param_names, local_vars):
+    async def _execute_custom_tool(self, tool_name, parsed, args):
         """Execute a custom tool by running its implementation in a sandbox"""
         import uuid
         from bin.sandbox import run as sandbox_run
 
         fs = self.ctx.fs()
 
-        # Build the full script with argument extraction
-        script_lines = ["import sys", ""]
-
-        # Add argument extractions: arg_name = sys.argv[1], etc.
-        for i, param_name in enumerate(param_names, start=1):
-            script_lines.append(f"{param_name} = sys.argv[{i}]")
-
-        script_lines.append("")
-        script_lines.append(parsed['implementation'])
-
-        script = '\n'.join(script_lines)
-
-        # Write to a temporary file
+        # Write implementation to a temporary file
         temp_id = str(uuid.uuid4())
         temp_file = f"tmp/tool_{temp_id}.py"
-        fs.write(temp_file, script.encode('utf-8'))
+        fs.write(temp_file, parsed['implementation'].encode('utf-8'))
 
         try:
-            # Build the command with arguments
-            arg_values = [str(local_vars[name]) for name in param_names]
-            # Properly escape arguments for shell (shlex.quote wraps in
-            # single-quotes, which preserves JSON double-quotes intact)
-            import shlex
-            escaped_args = ' '.join(shlex.quote(str(val)) for val in arg_values)
-            cmd = f"python /workspace/{temp_file} {escaped_args}".strip()
+            # Build the command, passing args as-is
+            cmd = f"python /workspace/{temp_file}"
+            if args.strip():
+                cmd += f" {args}"
 
             # execute via sandbox with --cmd
-            return await sandbox_run("--image", "python:3.12", "--cmd", cmd, readonly=True, quiet=True, capture=True)
+            return await sandbox_run("--image", "python:3.12", "--cmd", cmd, readonly=False, quiet=True, capture=True)
         finally:
             # Clean up temp file
             try:
@@ -168,7 +217,7 @@ class ToolProvider:
             return self[key]
         except KeyError:
             return default
-        
+
     def keys(self):
         """Return all available tool names"""
         custom_tools = self._load_custom_tools()
@@ -200,74 +249,14 @@ def tool_signature(func):
     return f"{func.__name__}({', '.join(params)})"
 
 @tool
-def read(filepath: str) -> str:
-    """Reads the contents of a file."""
-    return SystemContext.current().fs().read(filepath).decode('utf-8')
-
-@tool
-def list_directory(path: str = ".") -> str:
-    """Lists the contents of a specified directory path."""
-    from bin.ls import _list_directory
-    result = ""
-    for entry in _list_directory(SystemContext.current().fs(), path):
-        result += entry + "\n"
-    return result.strip()
-
-@tool
 def write(filepath: str, content: str) -> str:
     """
     Writes content to a specified file.
-    
+
     Non-existent directory path components are created as needed.
     """
     SystemContext.current().fs().write(filepath, content.encode('utf-8'))
     return f"Wrote to {filepath}"
-
-@tool
-def delete(filepath: str) -> str:
-    """Deletes a specified file."""
-    SystemContext.current().fs().delete(filepath)
-    return f"Deleted {filepath}"
-
-@tool
-def grep(pattern: str, path: str = ".", recursive: bool = True, ignore_case: bool = False) -> str:
-    """
-    Searches file contents for lines matching a regex pattern.
-
-    Returns matching lines prefixed with filepath and line number.
-    Searches recursively by default. Read-only — never modifies files.
-    """
-    from bin.grep import _grep_files, _collect_files_recursive
-    ctx = SystemContext.current()
-    vault = ctx.fs()
-    abs_path, vault_path = None, path.strip("/")
-
-    # Resolve path
-    from fs.utils import resolve_path as _resolve
-    abs_path, vault_path = _resolve(path, ctx.cwd)
-
-    if recursive and vault.is_dir(vault_path):
-        files = _collect_files_recursive(vault, abs_path)
-    elif vault.exists(vault_path):
-        files = [vault_path]
-    else:
-        return f"grep: {path}: No such file or directory"
-
-    results = _grep_files(vault, pattern, files, ignore_case=ignore_case)
-    if not results:
-        return "No matches found."
-
-    lines = []
-    for filepath, lineno, text in results:
-        lines.append(f"{filepath}:{lineno}:{text}")
-    return "\n".join(lines)
-
-@tool
-def sleep(seconds: int) -> str:
-    """Sleeps for the specified number of seconds."""
-    import time
-    time.sleep(seconds)
-    return f"Slept for {seconds} seconds"
 
 @tool
 async def ash(command: str) -> str:
@@ -275,7 +264,6 @@ async def ash(command: str) -> str:
     from bin.ash import run_command
 
     # Capture stdout and stderr
-    import io
     stdout = io.StringIO()
     stderr = io.StringIO()
     with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -293,7 +281,7 @@ async def ash(command: str) -> str:
     return output.strip()
 
 @tool
-def create_tool(name: str, description: str, arguments: str, implementation: str) -> str:
+def create_tool(name: str, description: str, implementation: str) -> str:
     """
     Creates a new tool file in /bin/<name>.tool with a structured format.
 
@@ -302,19 +290,16 @@ def create_tool(name: str, description: str, arguments: str, implementation: str
     .DESCRIPTION
     <description text>
 
-    .ARGUMENT <name> <type>
-    .ARGUMENT <name> <type>
-    ...
-
     .IMPL
     <python implementation>
 
     Parameters:
     - name: The tool name (creates /bin/<name>.tool)
     - description: Text describing what the tool does (for .DESCRIPTION section)
-    - arguments: Newline-separated list of "<name> <type>" pairs for .ARGUMENT lines
-                 (e.g., "filepath str\\ncount int"). Leave empty if no arguments.
     - implementation: Python script for the .IMPL section
+
+    The tool receives a single `args: str` argument. The implementation
+    can parse arguments from sys.argv as needed.
 
     The Python implementation will be executed in a sandboxed environment where
     /workspace is the current working directory, containing a copy of the / (root)
@@ -324,34 +309,27 @@ def create_tool(name: str, description: str, arguments: str, implementation: str
     create_tool(
         name="wordcount",
         description="Counts words in a file",
-        arguments="filepath str",
-        implementation="with open(f'/workspace{filepath}') as f:\\n    print(len(f.read().split()))"
+        implementation="import sys\\nwith open(f'/workspace/{sys.argv[1]}') as f:\\n    print(len(f.read().split()))"
     )
     """
     ctx = SystemContext.current()
     fs = ctx.fs()
 
     # Construct the filepath
-    filepath = f"bin/{name}.tool"
+    filepath = f"bin/{name}"
 
     # Check if file already exists
     if fs.exists(filepath):
-        return f"Error: Tool /bin/{name}.tool already exists"
+        return f"Error: Tool /bin/{name} already exists"
 
     # Build the tool file content
-    content = f".DESCRIPTION\n{description}\n\n"
-
-    # Add arguments if provided
-    if arguments.strip():
-        for arg_line in arguments.strip().split("\n"):
-            arg_line = arg_line.strip()
-            if arg_line:
-                content += f".ARGUMENT {arg_line}\n"
-        content += "\n"
-
-    content += f".IMPL\n{implementation}\n"
+    content = f".DESCRIPTION\n{description}\n\n.IMPL\n{implementation}\n"
 
     # Write the file
     fs.write(filepath, content.encode('utf-8'))
 
-    return f"Created tool at /bin/{name}.tool"
+    return f"Created tool at /bin/{name}"
+
+
+# Auto-discover bin/ commands at import time
+_discover_bin_tools()

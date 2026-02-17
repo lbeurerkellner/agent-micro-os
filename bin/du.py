@@ -183,8 +183,8 @@ async def run(*args):
                     dir_part = ctx.cwd.lstrip('/')
                     pattern_part = vault_pattern if vault_pattern else pattern
 
-                # List all files/dirs in the directory
-                all_files = vault.list()
+                # List files/dirs in the directory, filtered by prefix
+                all_files = vault.list(prefix=dir_part)
                 matched = set()
 
                 # Match files and extract directory names

@@ -1,3 +1,13 @@
+_USAGE = """\
+rm - Remove files or directories
+
+Usage: rm [-r] [-h] FILE [FILE ...]
+
+Options:
+  -r    Remove directories and their contents recursively
+  -h    Show this help message"""
+
+
 async def run(*args):
     """Remove files or directories."""
     from system.context import SystemContext
@@ -8,8 +18,8 @@ async def run(*args):
         print("No context found. Please run this command within a SystemContext.")
         return
 
-    if len(args) == 0:
-        print("Usage: rm [-r] <file> [file2 ...]")
+    if not args or args[0] == '-h':
+        print(_USAGE)
         return
 
     vault = ctx.fs()
@@ -23,13 +33,13 @@ async def run(*args):
             recursive = True
         elif arg.startswith("-"):
             print(f"rm: invalid option -- '{arg[1:]}'")
-            print("Usage: rm [-r] <file> [file2 ...]")
+            print(_USAGE)
             return
         else:
             files_to_remove.append(arg)
 
     if len(files_to_remove) == 0:
-        print("Usage: rm [-r] <file> [file2 ...]")
+        print(_USAGE)
         return
 
     # Remove each file/directory
@@ -49,7 +59,7 @@ async def run(*args):
                 continue
 
             # Remove all files in the directory
-            all_files = vault.list()
+            all_files = vault.list(prefix=vault_path)
             prefix = vault_path + '/'
             files_in_dir = [f for f in all_files if f.startswith(prefix) or f == vault_path]
 

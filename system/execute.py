@@ -46,6 +46,25 @@ async def execute(ctx, filepath, *args):
             print(f"{filepath}: unsupported interpreter: {shebang}")
             return
 
+    # check for .DESCRIPTION/.IMPL (custom tool file)
+    if ".DESCRIPTION" in contents and ".IMPL" in contents:
+        from system.tools import ToolProvider
+        from system.context import SystemContext
+
+        provider = ToolProvider(SystemContext.current())
+        parsed = provider._parse_tool_file(contents)
+
+        args_str = " ".join(args) if args else ""
+        try:
+            result = await provider._execute_custom_tool(
+                vault_path.split("/")[-1], parsed, args_str
+            )
+            if result:
+                print(result)
+        except Exception as e:
+            print(f"Error running tool {filepath}: {str(e)}")
+        return
+
     # check for .PROMPT directive
     if not contents.startswith(".PROMPT\n"):
         print(f"{filepath} is not executable")
