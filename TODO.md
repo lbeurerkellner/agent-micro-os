@@ -1,7 +1,5 @@
 # TODO
 
-* think: are CLI and tool the same?
-
 * polish create_tool flow
 
 * executable permission system for tools/CLIs .READONLY, .ONLY_PASSED_FILES, .NETWORK, .TIMELIMIT, .TOKENLIMIT, .COSTLIMIT, .MODEL

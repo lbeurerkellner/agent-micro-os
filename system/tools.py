@@ -254,18 +254,8 @@ def tool_signature(func):
     return f"{func.__name__}({', '.join(params)})"
 
 @tool
-def write(filepath: str, content: str) -> str:
-    """
-    Writes content to a specified file.
-
-    Non-existent directory path components are created as needed.
-    """
-    SystemContext.current().fs().write(filepath, content.encode('utf-8'))
-    return f"Wrote to {filepath}"
-
-@tool
 async def ash(command: str) -> str:
-    """Executes an 'ash' shell command in the current context. See ls /sbin and ls /bin for available commands. See man <command> for details on specific commands."""
+    """Executes an 'ash' shell command in the current context. See ls /sbin and ls /bin for available commands. Note that this is only a very restricted shell environment. You always should prefer using dedicated tools, and otherwise check /sbin and /bin before running a command with this."""
     from bin.ash import run_command
 
     # Capture stdout and stderr

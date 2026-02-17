@@ -8,8 +8,9 @@ async def run(*args):
         print("No context found. Please run this command within a SystemContext.")
         return
 
-    if len(args) != 1:
-        print("Usage: cd <directory>")
+    # without args, go to /
+    if not args:
+        ctx.cwd = '/'
         return
 
     new_dir = args[0]

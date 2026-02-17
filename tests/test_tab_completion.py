@@ -7,9 +7,9 @@ from bin.ash import get_available_commands, get_path_completions
 
 def test_command_completion(temp_db):
     """Test command name completion."""
-    with SystemContext(user="cmd_user", fsimage=temp_db):
+    with SystemContext(user="cmd_user", fsimage=temp_db) as ctx:
         SystemContext.current().mount("sbin", BinProvider())
-        commands = get_available_commands()
+        commands = get_available_commands(ctx)
 
         assert "ls" in commands
         assert "cd" in commands

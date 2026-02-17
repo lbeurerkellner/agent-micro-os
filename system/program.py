@@ -1,5 +1,6 @@
 import asyncio
 import json
+import signal
 import sys
 import uuid
 from dataclasses import dataclass, field
@@ -327,8 +328,25 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
         task = asyncio.create_task(agent_task())
 
         if not is_background:
-            # wait for task to complete
-            await task
+            # install SIGINT handler to cancel the running task on ctrl-c
+            loop = asyncio.get_running_loop()
+            cancelled_by_user = False
+
+            def on_sigint():
+                nonlocal cancelled_by_user
+                cancelled_by_user = True
+                task.cancel()
+
+            loop.add_signal_handler(signal.SIGINT, on_sigint)
+            try:
+                await task
+            except asyncio.CancelledError:
+                await stop_spinner()
+                if cancelled_by_user:
+                    print_output("\nInterrupted.", file=sys.stderr)
+                context.unregister_agent(call_id)
+            finally:
+                loop.remove_signal_handler(signal.SIGINT)
         else:
             # move it to the background
             context.register_background_task(task)
