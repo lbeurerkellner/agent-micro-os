@@ -10,6 +10,7 @@ from system.tools import ToolProvider
 from termcolor import colored
 
 from agents import Runner, Agent, RawResponsesStreamEvent, RunItemStreamEvent, function_tool, ModelSettings
+from system.terminal_markdown import TerminalMarkdown
 
 @dataclass
 class Program:
@@ -260,6 +261,7 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
                     start_spinner()
                     streaming_text = False
                     tool_names = {}  # item_id -> tool name
+                    md = TerminalMarkdown(lambda t: print_output(t, end="", flush=True))
 
                     async for event in result.stream_events():
                         # Handle tool output from RunItemStreamEvent
@@ -290,7 +292,7 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
                                 streaming_text = True
                                 await stop_spinner()
                                 print_output()  # newline before text response
-                            print_output(raw.delta, end="", flush=True)
+                            md.feed(raw.delta)
 
                         elif event_type == "response.output_item.added":
                             # track tool name from the function call item
@@ -330,11 +332,13 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
 
                         elif event_type == "response.created" and streaming_text:
                             # new response cycle after text — agent is doing another turn
+                            md.end()
                             streaming_text = False
                             print_output()  # newline after previous text
                             start_spinner()
 
                     await stop_spinner()
+                    md.end()
                     print_output()  # newline after turn
 
                     if not program.is_interactive:
