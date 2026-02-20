@@ -40,11 +40,13 @@ class SystemContext:
     fsimage: str # path to fsimage DB, constant
     cwd: str # current working directory, mutable
     path: list[str] # system PATH for command resolution
+    interactive: bool = False # whether we're in an interactive session (e.g. ash)
 
-    def __init__(self, user: str, fsimage: str, debug: bool = False):
+    def __init__(self, user: str, fsimage: str, debug: bool = False, interactive: bool = False):
         self.user = user
         self.fsimage = fsimage
         self.debug = debug
+        self.interactive = interactive
 
         self.path = ['/sbin', '/bin']
 
@@ -100,6 +102,21 @@ class SystemContext:
         new_stack.pop()
         _context_stack.set(new_stack)
         return False
+
+    def child(self, **kwargs) -> 'SystemContext':
+        """Creates a child context inheriting from the current one, with optional overrides."""
+        c = SystemContext(
+            user=kwargs.get('user', self.user),
+            fsimage=kwargs.get('fsimage', self.fsimage),
+            debug=kwargs.get('debug', self.debug),
+            interactive=kwargs.get('interactive', self.interactive),
+        )
+        c.path = kwargs.get('path', self.path.copy())
+        c.cwd = kwargs.get('cwd', self.cwd)
+        c._mounts = kwargs.get('mounts', self._mounts.copy())
+        c._agents = kwargs.get('agents', self._agents.copy())
+        c._background_tasks = kwargs.get('background_tasks', self._background_tasks.copy())
+        return c
 
     @classmethod
     def current(cls) -> Optional['SystemContext']:

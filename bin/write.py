@@ -8,7 +8,11 @@ Options:
 
 Arguments:
   FILE     Path to the file to write
-  CONTENT  Content to write to the file (quote to preserve spaces/newlines)"""
+  CONTENT  The content to write to the file.
+
+Example:
+  write /path/to/file "line one\\nline two\\nline three"
+"""
 
 
 async def run(*args):

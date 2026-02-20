@@ -52,15 +52,14 @@ def _discover_bin_tools():
 
 
 def _register_bin_tool(name, description, run_fn):
-    """Register a bin/ command as a tool with signature cmd(args: str) -> str."""
+    """Register a bin/ command as a tool with signature cmd(args: list[str]) -> str."""
 
-    async def _tool_wrapper(args: str = "") -> str:
-        parsed_args = shlex.split(args) if args.strip() else []
+    async def _tool_wrapper(args: list[str] = []) -> str:
         stdout = io.StringIO()
         stderr = io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
             try:
-                result = await run_fn(*parsed_args)
+                result = await run_fn(*args)
             except Exception as e:
                 return f"Error: {e}"
         output = stdout.getvalue()
@@ -157,8 +156,8 @@ class ToolProvider:
         parsed = self._parse_tool_file(content)
 
         # Create the wrapper function dynamically using exec
-        func_code = f'''async def {tool_name}(args: str = "") -> str:
-    """{parsed['description']}"""
+        func_code = f'''async def {tool_name}(args: list[str] = []) -> str:
+    """{parsed['description']}\n\nImplementation in /bin/{tool_name}"""
     return await _execute_tool({repr(tool_name)}, {repr(parsed)}, args)
 '''
 
@@ -168,7 +167,7 @@ class ToolProvider:
 
         return func
 
-    async def _execute_custom_tool(self, tool_name, parsed, args):
+    async def _execute_custom_tool(self, tool_name, parsed, args, quiet=True, capture=True):
         """Execute a custom tool by running its implementation in a sandbox"""
         import uuid
         from bin.sandbox import run as sandbox_run
@@ -183,11 +182,11 @@ class ToolProvider:
         try:
             # Build the command, passing args as-is
             cmd = f"python /workspace/{temp_file}"
-            if args.strip():
-                cmd += f" {args}"
+            if args:
+                cmd += " " + " ".join(shlex.quote(a) for a in args)
 
             # execute via sandbox with --cmd
-            return await sandbox_run("--image", "python:3.12", "--cmd", cmd, readonly=False, quiet=True, capture=True)
+            return await sandbox_run("--image", "python:3.12", "--cmd", cmd, readonly=False, quiet=quiet, capture=capture)
         finally:
             # Clean up temp file
             try:
@@ -261,11 +260,15 @@ async def ash(command: str) -> str:
     # Capture stdout and stderr
     stdout = io.StringIO()
     stderr = io.StringIO()
+
+    ctx = SystemContext.current()
+
     with redirect_stdout(stdout), redirect_stderr(stderr):
-        try:
-            result = await run_command(command)
-        except Exception as e:
-            return f"Error executing command: {e}\n{stderr.getvalue()}"
+        with ctx.child(interactive=False) as ctx:
+            try:
+                result = await run_command(command)
+            except Exception as e:
+                return f"Error executing command: {e}\n{stderr.getvalue()}"
 
     output = stdout.getvalue()
     if result is not None:
@@ -278,9 +281,9 @@ async def ash(command: str) -> str:
 @tool
 def create_tool(name: str, description: str, implementation: str) -> str:
     """
-    Creates a new tool file in /bin/<name>.tool with a structured format.
+    Creates a new tool executable in the form of a CLI executable in /bin/<name>.
 
-    The tool file will be created at /bin/<name>.tool in the vault and contains:
+    The tool executable will be created at /bin/<name> in the vault and contains:
 
     .DESCRIPTION
     <description text>
@@ -289,16 +292,19 @@ def create_tool(name: str, description: str, implementation: str) -> str:
     <python implementation>
 
     Parameters:
-    - name: The tool name (creates /bin/<name>.tool)
-    - description: Text describing what the tool does (for .DESCRIPTION section)
+    - name: The tool name (creates /bin/<name>)
+    - description: Text describing what the tool does so others know how to use it exactly (for .DESCRIPTION section)
     - implementation: Python script for the .IMPL section
 
-    The tool receives a single `args: str` argument. The implementation
-    can parse arguments from sys.argv as needed.
+    The tool receives a single `args: str` argument. The implementation can parse arguments from sys.argv as needed.
 
     The Python implementation will be executed in a sandboxed environment where
     /workspace is the current working directory, containing a copy of the / (root)
     of the current environment. The tool can read/write files relative to /workspace.
+
+    Once created, the tool will be exposed as /bin/<executable> but also show up as a system-mounted tool in the virtual filesystem at /tool/<name>.
+
+    You should use the 'ash' tool to test the created tool directly via 'ash <toolname> <args>' after creation. It may be helpful to debug the tool with some simple inputs, before you finalize.
 
     Example:
     create_tool(

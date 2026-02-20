@@ -19,6 +19,9 @@ class Program:
     # tool paths as declared in the program (e.g. /tools/read)
     tool_paths: list[str]
 
+    # whether this is an interactive program that keeps prompting after a turn completes
+    is_interactive: bool
+
     # input prompt
     prompt: str
 
@@ -49,6 +52,7 @@ def parse(contents: str):
     tool_paths: list[str] = []
     prompt_lines = []
     section = None
+    is_interactive = False
     
     max_turns = safe_int(SystemContext.current().read("/etc/model/max_turns", "10"), default=10)
 
@@ -65,6 +69,9 @@ def parse(contents: str):
             continue
         elif line == ".TOOLS":
             section = "tools"
+            continue
+        elif line == ".INTERACTIVE": # indicates that this is an interactive program that keeps prompting after a turn completes
+            is_interactive = True
             continue
         elif line.startswith(".INCLUDE"):
             # support including other program files, e.g. .INCLUDE /programs/helper.txt
@@ -104,7 +111,7 @@ def parse(contents: str):
     tools = list(dict.fromkeys(tools))
     
     prompt = "\n".join(prompt_lines).strip()
-    return Program(tools=tools, tool_paths=tool_paths, system_prompt=system_prompt, prompt=prompt, max_turns=max_turns or 10)
+    return Program(tools=tools, tool_paths=tool_paths, system_prompt=system_prompt, prompt=prompt, max_turns=max_turns or 10, is_interactive=is_interactive)
 
 def safe_int(value: str, default: int = 0) -> int:
     try:
@@ -155,8 +162,25 @@ async def run(program: Program, filepath: str, *args):
 async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Program, filepath: str, model_configuration: str, *args):
     # check if background agent
     is_background = len(args) > 0 and args[-1] == "&"
-    if is_background: 
+    if is_background:
         args = args[:-1]
+
+    # parse --session <id> flag
+    from system.session import VaultJSONSession
+    session_id = None
+    filtered_args = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--session" and i + 1 < len(args):
+            session_id = args[i + 1]
+            i += 2
+        else:
+            filtered_args.append(args[i])
+            i += 1
+    args = tuple(filtered_args)
+    if session_id is None:
+        session_id = str(uuid.uuid4())[:8]
+    session = VaultJSONSession(session_id, context)
     
     # spinner setup
     spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -211,6 +235,9 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
             context.fs().write(trace_path, content.encode(), mode="a")
 
         async def agent_task():
+            trace_content = ""
+            total_input = 0
+            total_output = 0
             try:
                 # construct full prompt input
                 args_input = "" if len(args) == 0 else "\n\nExtra Input:\n" + " ".join(args)
@@ -219,6 +246,7 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
                 # write trace header immediately
                 trace_content = filepath + "\n"
                 trace_content += ".MODEL " + model_configuration + "\n"
+                trace_content += ".SESSION " + session_id + "\n"
                 trace_content += ".SYSTEM_PROMPT\n" + (agent.instructions or "") + "\n"
                 trace_content += ".PROMPT\n" + prompt + "\n"
                 if program.tool_paths:
@@ -226,101 +254,121 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
                 trace_content += ".RESPONSE\n"
                 trace_write(trace_content)
 
-                result = Runner.run_streamed(agent, prompt, max_turns=program.max_turns)
+                while True:
+                    result = Runner.run_streamed(agent, prompt, max_turns=program.max_turns, session=session)
 
-                start_spinner()
-                streaming_text = False
-                tool_names = {}  # item_id -> tool name
-                total_input = 0
-                total_output = 0
+                    start_spinner()
+                    streaming_text = False
+                    tool_names = {}  # item_id -> tool name
 
-                async for event in result.stream_events():
-                    # Handle tool output from RunItemStreamEvent
-                    if isinstance(event, RunItemStreamEvent):
-                        if event.name == "tool_output":
+                    async for event in result.stream_events():
+                        # Handle tool output from RunItemStreamEvent
+                        if isinstance(event, RunItemStreamEvent):
+                            if event.name == "tool_output":
+                                await stop_spinner()
+                                raw_item = event.item.raw_item
+                                full_output = raw_item.get("output", "") if isinstance(raw_item, dict) else str(event.item.output)
+                                full_output = str(full_output)
+                                # trace: full output
+                                call_id_ref = raw_item.get("call_id", "") if isinstance(raw_item, dict) else ""
+                                trace_content += json.dumps({"type": "tool_output", "call_id": call_id_ref, "output": full_output}) + "\n"
+                                trace_write(trace_content)
+                                # display: truncated
+                                display = (full_output if len(full_output) <= 200 else full_output[:200]).replace("\n", "⏎ ") + "..."
+                                print_output(colored(f"  -> {display}", 'dark_grey'), file=sys.stderr)
+                                start_spinner()
+                            continue
+
+                        if not isinstance(event, RawResponsesStreamEvent):
+                            continue
+
+                        raw = event.data
+                        event_type = getattr(raw, "type", None)
+
+                        if event_type == "response.output_text.delta":
+                            if not streaming_text:
+                                streaming_text = True
+                                await stop_spinner()
+                                print_output()  # newline before text response
+                            print_output(raw.delta, end="", flush=True)
+
+                        elif event_type == "response.output_item.added":
+                            # track tool name from the function call item
+                            item = getattr(raw, "item", None)
+                            if item and getattr(item, "type", None) == "function_call":
+                                tool_names[item.id] = item.name
+
+                        elif event_type == "response.function_call_arguments.done":
                             await stop_spinner()
-                            raw_item = event.item.raw_item
-                            full_output = raw_item.get("output", "") if isinstance(raw_item, dict) else str(event.item.output)
-                            full_output = str(full_output)
-                            # trace: full output
-                            call_id_ref = raw_item.get("call_id", "") if isinstance(raw_item, dict) else ""
-                            trace_content += json.dumps({"type": "tool_output", "call_id": call_id_ref, "output": full_output}) + "\n"
+                            name = raw.name or tool_names.get(raw.item_id, "?")
+                            args_display = raw.arguments if len(raw.arguments) <= 200 else raw.arguments[:200] + "..."
+                            print_output(colored(f"[{name}", 'dark_grey', attrs=['bold']) + colored(f"({args_display})]", 'dark_grey'), file=sys.stderr)
+                            # trace: tool call
+                            trace_content += json.dumps({"type": "tool_call", "name": name, "arguments": raw.arguments}) + "\n"
                             trace_write(trace_content)
-                            # display: truncated
-                            display = (full_output if len(full_output) <= 200 else full_output[:200]).replace("\n", "⏎ ") + "..."
-                            print_output(colored(f"  -> {display}", 'dark_grey'), file=sys.stderr)
                             start_spinner()
-                        continue
 
-                    if not isinstance(event, RawResponsesStreamEvent):
-                        continue
-
-                    raw = event.data
-                    event_type = getattr(raw, "type", None)
-
-                    if event_type == "response.output_text.delta":
-                        if not streaming_text:
-                            streaming_text = True
-                            await stop_spinner()
-                            print_output()  # newline before text response
-                        print_output(raw.delta, end="", flush=True)
-
-                    elif event_type == "response.output_item.added":
-                        # track tool name from the function call item
-                        item = getattr(raw, "item", None)
-                        if item and getattr(item, "type", None) == "function_call":
-                            tool_names[item.id] = item.name
-
-                    elif event_type == "response.function_call_arguments.done":
-                        await stop_spinner()
-                        name = raw.name or tool_names.get(raw.item_id, "?")
-                        args_display = raw.arguments if len(raw.arguments) <= 200 else raw.arguments[:200] + "..."
-                        print_output(colored(f"[{name}", 'dark_grey', attrs=['bold']) + colored(f"({args_display})]", 'dark_grey'), file=sys.stderr)
-                        # trace: tool call
-                        trace_content += json.dumps({"type": "tool_call", "name": name, "arguments": raw.arguments}) + "\n"
-                        trace_write(trace_content)
-                        start_spinner()
-
-                    elif event_type == "response.output_text.done":
-                        # trace: full message text
-                        trace_content += json.dumps({"type": "message", "text": raw.text}) + "\n"
-                        trace_write(trace_content)
-
-                    elif event_type == "response.output_item.done":
-                        item = getattr(raw, "item", None)
-                        if item and getattr(item, "type", None) == "reasoning":
-                            summary = getattr(item, "summary", [])
-                            trace_content += json.dumps({"type": "reasoning", "summary": summary}) + "\n"
+                        elif event_type == "response.output_text.done":
+                            # trace: full message text
+                            trace_content += json.dumps({"type": "message", "text": raw.text}) + "\n"
                             trace_write(trace_content)
 
-                    elif event_type == "response.completed":
-                        usage = getattr(raw.response, "usage", None)
-                        if usage:
-                            total_input += usage.input_tokens
-                            total_output += usage.output_tokens
-                            trace_content += json.dumps({"type": "usage", "input_tokens": total_input, "output_tokens": total_output}) + "\n"
-                            trace_write(trace_content)
+                        elif event_type == "response.output_item.done":
+                            item = getattr(raw, "item", None)
+                            if item and getattr(item, "type", None) == "reasoning":
+                                summary = getattr(item, "summary", [])
+                                trace_content += json.dumps({"type": "reasoning", "summary": summary}) + "\n"
+                                trace_write(trace_content)
 
-                    elif event_type == "response.created" and streaming_text:
-                        # new response cycle after text — agent is doing another turn
-                        streaming_text = False
-                        print_output()  # newline after previous text
-                        start_spinner()
+                        elif event_type == "response.completed":
+                            usage = getattr(raw.response, "usage", None)
+                            if usage:
+                                total_input += usage.input_tokens
+                                total_output += usage.output_tokens
+                                trace_content += json.dumps({"type": "usage", "input_tokens": total_input, "output_tokens": total_output}) + "\n"
+                                trace_write(trace_content)
 
-                await stop_spinner()
-                print_output()  # final newline
+                        elif event_type == "response.created" and streaming_text:
+                            # new response cycle after text — agent is doing another turn
+                            streaming_text = False
+                            print_output()  # newline after previous text
+                            start_spinner()
 
-                # trace: write final usage and completion marker
-                trace_content += ".USAGE\n"
-                trace_content += json.dumps({"input_tokens": total_input, "output_tokens": total_output}) + "\n"
-                trace_content += ".COMPLETED\n"
-                trace_write(trace_content)
+                    await stop_spinner()
+                    print_output()  # newline after turn
+
+                    if not program.is_interactive:
+                        break
+
+                    # prompt for next user input
+                    print_output("\n! ", end="", flush=True)
+                    loop = asyncio.get_running_loop()
+                    try:
+                        line = await loop.run_in_executor(None, sys.stdin.readline)
+                    except asyncio.CancelledError:
+                        break
+                    line = line.rstrip("\n")
+                    if not line:
+                        break
+
+                    prompt = line
+                    if prompt.strip() == "exit":
+                        break
+                    trace_content += json.dumps({"type": "user_input", "text": prompt}) + "\n"
+                    trace_write(trace_content)
+
+                print_output(colored(f"\nsession: {session_id}", "dark_grey"), file=sys.stderr)
             except Exception as e:
                 await stop_spinner()
                 trace_content += ".ERROR\n" + str(e) + "\n"
                 trace_write(trace_content)
                 print_output(f"Error running program {filepath}: {str(e)}")
             finally:
+                # log final usage and completion marker
+                trace_content += ".USAGE\n"
+                trace_content += json.dumps({"input_tokens": total_input, "output_tokens": total_output}) + "\n"
+                trace_content += ".COMPLETED\n"
+                trace_write(trace_content)
                 # unregister from /proc
                 context.unregister_agent(call_id)
         
@@ -344,6 +392,7 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
                 await stop_spinner()
                 if cancelled_by_user:
                     print_output("\nInterrupted.", file=sys.stderr)
+                    print_output(colored(f"session: {session_id}", "dark_grey"), file=sys.stderr)
                 context.unregister_agent(call_id)
             finally:
                 loop.remove_signal_handler(signal.SIGINT)

@@ -57,7 +57,7 @@ async def execute(ctx, filepath, *args):
         args_str = " ".join(args) if args else ""
         try:
             result = await provider._execute_custom_tool(
-                vault_path.split("/")[-1], parsed, args_str
+                vault_path.split("/")[-1], parsed, args_str, quiet=True, capture=False
             )
             if result:
                 print(result)

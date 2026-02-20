@@ -322,7 +322,7 @@ async def loop(user: str, fsimage: str, command: str = None, debug: bool = False
     :param command: Optional command to run in non-interactive mode
     :param debug: Enable debug output for tab completion
     """
-    with SystemContext(user=user, fsimage=fsimage, debug=debug) as ctx:
+    with SystemContext(user=user, fsimage=fsimage, debug=debug, interactive=True) as ctx:
         # Mount built-in commands as /sbin
         from fs.providers import BinProvider, ModelProvider, ProcProvider, ToolsFolderProvider
 

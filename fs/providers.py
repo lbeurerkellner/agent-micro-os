@@ -159,23 +159,25 @@ class ToolsFolderProvider(FolderProvider):
     """
 
     def __init__(self, ctx):
-        self._ctx = ctx
-        self.tool_provider = ToolProvider(ctx)
+        self.ctx = ctx
 
     def list(self, prefix: str = "") -> list[str]:
+        tool_provider = ToolProvider(self.ctx)
         if prefix:
-            return sorted(k for k in self.tool_provider.keys() if k.startswith(prefix))
-        return sorted(self.tool_provider.keys())
+            return sorted(k for k in tool_provider.keys() if k.startswith(prefix))
+        return sorted(tool_provider.keys())
 
     def read(self, path: str) -> bytes:
         path = path.strip("/")
-        if path not in self.tool_provider:
+        tool_provider = ToolProvider(self.ctx)
+        if path not in tool_provider:
             raise FileNotFoundError(f"'{path}' is not a registered tool")
-        return f"{termcolor.colored(tool_signature(self.tool_provider[path]), 'cyan', attrs=['bold'])}\n\n{tool_description(self.tool_provider[path])}".encode()
+        return f"{termcolor.colored(tool_signature(tool_provider[path]), 'cyan', attrs=['bold'])}\n\n{tool_description(tool_provider[path])}".encode()
 
     def exists(self, path: str) -> bool:
         path = path.strip("/")
-        return path in self.tool_provider
+        tool_provider = ToolProvider(self.ctx)
+        return path in tool_provider
 
     def is_dir(self, path: str) -> bool:
         path = path.strip("/")
