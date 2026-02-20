@@ -107,8 +107,10 @@ def collect_processes(vault) -> list[dict]:
     return processes
 
 
-def format_usage_header(stats: dict) -> list[tuple[str, str]]:
+def format_usage_header(stats: dict, cost_limit: float | None = None) -> list[tuple[str, str]]:
     """Format system-wide usage stats as formatted text tuples with bold labels."""
+    from bin.usage import format_cost_bar
+
     total_in = stats["input_tokens"]
     total_out = stats["output_tokens"]
     total = total_in + total_out
@@ -116,13 +118,8 @@ def format_usage_header(stats: dict) -> list[tuple[str, str]]:
     sessions = stats["sessions"]
 
     parts = []
-    if stats["completed"]:
-        parts.append(f"{stats['completed']} completed")
     if stats["errors"]:
         parts.append(f"{stats['errors']} errors")
-    in_progress = sessions - stats["completed"] - stats["errors"]
-    if in_progress:
-        parts.append(f"{in_progress} in progress")
 
     detail = f" ({', '.join(parts)})" if parts else ""
 
@@ -138,6 +135,24 @@ def format_usage_header(stats: dict) -> list[tuple[str, str]]:
         for model, count in sorted_models:
             padded = model.ljust(max_name)
             ft.append(("", f"  {padded} | {count} session{'s' if count != 1 else ''}\n"))
+
+    # Cost row with optional progress bar
+    cost = stats.get("cost", 0.0)
+    if cost_limit is not None:
+        pct = min(cost / cost_limit, 1.0) if cost_limit > 0 else 0.0
+        bar = format_cost_bar(cost, cost_limit)
+        if pct >= 1.0:
+            bar_style = "fg:ansired bold"
+        elif pct >= 0.8:
+            bar_style = "fg:ansiyellow"
+        else:
+            bar_style = "fg:ansigreen"
+        ft.append(("bold", "Cost: "))
+        ft.append(("", f"${cost:.4f} / ${cost_limit:.2f}  "))
+        ft.append((bar_style, bar + "\n"))
+    else:
+        ft.append(("bold", "Cost: "))
+        ft.append(("", f"${cost:.4f}\n"))
 
     return ft
 
@@ -217,7 +232,7 @@ async def run(*args):
         stats = collect_usage(vault, timedelta(hours=24))
 
         ft: list[tuple[str, str]] = []
-        ft.extend(format_usage_header(stats))
+        ft.extend(format_usage_header(stats, cost_limit=ctx.cost_limit))
         ft.append(("", "\n"))
         ft.extend(format_table(procs))
         return ft

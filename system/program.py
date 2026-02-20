@@ -256,6 +256,21 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
                 trace_write(trace_content)
 
                 while True:
+                    # Check cost limit before each turn
+                    if context.cost_limit is not None:
+                        from bin.usage import collect_usage
+                        from datetime import timedelta
+                        stats = collect_usage(context.fs(), timedelta(hours=24))
+                        used = stats["cost"]
+                        if used >= context.cost_limit:
+                            await stop_spinner()
+                            print_output(
+                                f"Cost limit of ${context.cost_limit:.4f}/24h exceeded "
+                                f"(${used:.4f} used). Blocking execution.",
+                                file=sys.stderr,
+                            )
+                            break
+
                     result = Runner.run_streamed(agent, prompt, max_turns=program.max_turns, session=session)
 
                     start_spinner()

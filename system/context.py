@@ -42,11 +42,13 @@ class SystemContext:
     path: list[str] # system PATH for command resolution
     interactive: bool = False # whether we're in an interactive session (e.g. ash)
 
-    def __init__(self, user: str, fsimage: str, debug: bool = False, interactive: bool = False):
+    def __init__(self, user: str, fsimage: str, debug: bool = False, interactive: bool = False, cost_limit: float | None = None):
         self.user = user
         self.fsimage = fsimage
         self.debug = debug
         self.interactive = interactive
+        # maximum USD cost allowed per 24h window (None = no limit)
+        self.cost_limit: float | None = cost_limit
 
         self.path = ['/sbin', '/bin']
 
@@ -116,6 +118,7 @@ class SystemContext:
         c._mounts = kwargs.get('mounts', self._mounts.copy())
         c._agents = kwargs.get('agents', self._agents.copy())
         c._background_tasks = kwargs.get('background_tasks', self._background_tasks.copy())
+        c.cost_limit = kwargs.get('cost_limit', self.cost_limit)
         return c
 
     @classmethod

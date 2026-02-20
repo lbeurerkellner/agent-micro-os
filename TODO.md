@@ -2,14 +2,17 @@
 
 * store /proc on disk again for multi-process use; add status for 'idle' agents (awaiting user input)
   - /proc agent never really goes away, unless deleted; make sure crashes are handled gracefully somehow (liveness check)
-  - add 'continue' cli to continue an agent session (print UUID when exiting a program); add 'fork' for a continue under a new /proc. Sort 'top' by most recent, with a clear separator on 'active'/'very recently active' ones
+
+* cron system
 
 
 # Later
 
+- add 'fork' for a continue under a new /proc. Sort 'top' by most recent, with a clear separator on 'active'/'very recently active' ones
+
 * executable permission system for tools/CLIs .READONLY, .ONLY_PASSED_FILES, .NETWORK, .TIMELIMIT, .TOKENLIMIT, .COSTLIMIT, .MODEL
 
-* new runtime: claude code sdk
+* new runtime: claude code
 
 * jq command, sed
 
@@ -18,5 +21,3 @@
 * stream redirects to file
 
 * bug: avoid print in tools
-
-* 

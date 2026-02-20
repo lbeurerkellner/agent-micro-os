@@ -314,15 +314,16 @@ def setup_readline(ctx, debug=False):
         print(f"[DEBUG]   Delimiters: {repr(delims)}")
 
 
-async def loop(user: str, fsimage: str, command: str = None, debug: bool = False):
+async def loop(user: str, fsimage: str, command: str = None, debug: bool = False, cost_limit: float | None = None):
     """Agent shell - simple async REPL that loads commands from bin/ modules.
 
     :param user: Username for the session
     :param fsimage: Filesystem image to use
     :param command: Optional command to run in non-interactive mode
     :param debug: Enable debug output for tab completion
+    :param cost_limit: Maximum USD cost allowed per 24h window (None = no limit)
     """
-    with SystemContext(user=user, fsimage=fsimage, debug=debug, interactive=True) as ctx:
+    with SystemContext(user=user, fsimage=fsimage, debug=debug, interactive=True, cost_limit=cost_limit) as ctx:
         # Mount built-in commands as /sbin
         from fs.providers import BinProvider, ModelProvider, ProcProvider, ToolsFolderProvider
 
@@ -407,10 +408,12 @@ if __name__ == "__main__":
     parser.add_argument("--fsimage", required=True, help="Filesystem image to use")
     parser.add_argument("-c", "--command", help="Command to run in non-interactive mode")
     parser.add_argument("--debug", action="store_true", help="Enable debug output for tab completion")
+    parser.add_argument("--limit", type=float, default=1.0, metavar="USD",
+                        help="Maximum cost limit in USD per 24h; blocks program turns when exceeded (default: $1.00)")
     args = parser.parse_args()
 
     try:
-        asyncio.run(loop(user=args.user, fsimage=args.fsimage, command=args.command, debug=args.debug))
+        asyncio.run(loop(user=args.user, fsimage=args.fsimage, command=args.command, debug=args.debug, cost_limit=args.limit))
     except KeyboardInterrupt:
         pass
     finally:

@@ -4,7 +4,7 @@ from datetime import timedelta
 
 import pytest
 
-from bin.usage import parse_timespan, parse_trajectory, aggregate
+from bin.usage import parse_timespan, parse_trajectory, aggregate, compute_cost
 from fs.vault import Vault
 
 
@@ -35,6 +35,33 @@ def test_parse_timespan_invalid():
 
     with pytest.raises(ValueError):
         parse_timespan("")
+
+
+# ========== compute_cost ==========
+
+
+def test_compute_cost_known_model():
+    # gpt-5-mini: $0.25/1M input, $2.00/1M output
+    cost = compute_cost("gpt-5-mini", 1_000_000, 1_000_000)
+    assert cost == pytest.approx(0.25 + 2.00)
+
+
+def test_compute_cost_with_provider_prefix():
+    # "openai gpt-5-mini" should strip prefix and produce same result
+    cost = compute_cost("openai gpt-5-mini", 1_000_000, 1_000_000)
+    assert cost == pytest.approx(0.25 + 2.00)
+
+
+def test_compute_cost_gpt5():
+    # gpt-5: $1.25/1M input, $10.00/1M output
+    cost = compute_cost("gpt-5", 500_000, 200_000)
+    assert cost == pytest.approx(0.625 + 2.00)
+
+
+def test_compute_cost_unknown_model():
+    # Unknown models return 0.0
+    assert compute_cost("gpt-3", 1_000_000, 1_000_000) == 0.0
+    assert compute_cost("", 1_000_000, 1_000_000) == 0.0
 
 
 # ========== parse_trajectory ==========
@@ -128,6 +155,11 @@ def test_aggregate():
     assert result["models"]["openai gpt-5-mini"] == 2
     assert result["models"]["openai gpt-5"] == 1
 
+    # gpt-5-mini: (300 input * 0.25 + 130 output * 2.00) / 1M
+    # gpt-5:      (500 input * 1.25 + 200 output * 10.00) / 1M
+    expected_cost = (300 * 0.25 + 130 * 2.00 + 500 * 1.25 + 200 * 10.00) / 1_000_000
+    assert result["cost"] == pytest.approx(expected_cost)
+
 
 def test_aggregate_empty():
     result = aggregate([])
@@ -136,6 +168,7 @@ def test_aggregate_empty():
     assert result["errors"] == 0
     assert result["input_tokens"] == 0
     assert result["output_tokens"] == 0
+    assert result["cost"] == 0.0
     assert result["models"] == {}
 
 
