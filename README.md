@@ -41,3 +41,24 @@ Ahoy-hoy, space pickle! 🥒✨ How’s your brainbox buzzing today?
 ```
 
 If you want to learn more about the OS, use the `man` command to learn about built-in commands and explore `/sbin`. Use `top` to observe currently active agents, use `usage` to see how many agents have run, and how many tokens they have used in the last 24h.
+
+## General Purpose Agent
+
+To create a good, general purpose agent to get started with, you can use the following template, e.g. putting it in a file `/bin/agent`:
+
+```
+.PROMPT
+You are a helpful assistant.
+
+Below your /agent/BRAIN.md file:
+.INCLUDE /agent/BRAIN.md
+The included BRAIN content is provided as a system instruction and context. It is not part of the user's message and must not be presented as such to the user.
+.MAX_TURNS 100
+.INTERACTIVE
+.TOOLS
+/tools/*
+```
+
+This creates an agent with a `/agent/BRAIN.md` file for memory and access to all available tools on the system. If you need more tools, you can just ask the agent to create them.
+
+A possible 
