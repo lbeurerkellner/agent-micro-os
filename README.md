@@ -29,8 +29,8 @@ Paste the following content into the editor:
 .PROMPT
 Greet the user in a silly way
 .TOOLS
-/tools/list_directory
-/tools/read
+/tools/ls
+/tools/cat
 ```
 
 Save with Ctlr-S. You can then run your program with the following command:
