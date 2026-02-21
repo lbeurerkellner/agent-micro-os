@@ -11,6 +11,7 @@ import termcolor
 from system.context import SystemContext, cprint
 from system.execute import execute
 from system.cmdparse import cmdparse
+from system.crond import start_crond
 from fs.utils import resolve_path
 
 import argparse
@@ -355,7 +356,7 @@ def setup_readline(ctx, debug=False):
         cprint(f"[DEBUG]   Delimiters: {repr(delims)}", file=ctx.stderr)
 
 
-async def loop(user: str, fsimage: str, command: str = None, debug: bool = False, cost_limit: float | None = None):
+async def loop(user: str, fsimage: str, command: str = None, debug: bool = False, cost_limit: float | None = None, crond: bool = True):
     """Agent shell - simple async REPL that loads commands from bin/ modules.
 
     :param user: Username for the session
@@ -374,8 +375,11 @@ async def loop(user: str, fsimage: str, command: str = None, debug: bool = False
         SystemContext.current().mount("tools", ToolsFolderProvider(ctx))
 
         # Start cron daemon as a background task
-        from system.crond import start_crond
-        crond_task = start_crond([user], fsimage)
+        if crond:
+            cprint("[crond starting in background]", file=ctx.stderr)
+            start_crond([user], fsimage)
+        else:
+            cprint("[crond not running in this process]", file=ctx.stderr)
 
         # Non-interactive mode: run single command and exit
         if command:
@@ -454,10 +458,11 @@ if __name__ == "__main__":
     parser.add_argument("--debug", action="store_true", help="Enable debug output for tab completion")
     parser.add_argument("--limit", type=float, default=1.0, metavar="USD",
                         help="Maximum cost limit in USD per 24h; blocks program turns when exceeded (default: $1.00)")
+    parser.add_argument("--crond", action="store_true", help="Start cron daemon (default: True)")
     args = parser.parse_args()
 
     try:
-        asyncio.run(loop(user=args.user, fsimage=args.fsimage, command=args.command, debug=args.debug, cost_limit=args.limit))
+        asyncio.run(loop(user=args.user, fsimage=args.fsimage, command=args.command, debug=args.debug, cost_limit=args.limit, crond=args.crond))
     except KeyboardInterrupt:
         pass
     finally:

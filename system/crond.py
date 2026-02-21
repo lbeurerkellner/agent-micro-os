@@ -4,6 +4,8 @@ import asyncio
 import io
 import re
 from dataclasses import dataclass
+from fs.providers import ModelProvider, ToolsFolderProvider
+from system.context import SystemContext
 from datetime import datetime
 
 # Matches ANSI escape sequences (colors, cursor movement, spinners, etc.)
@@ -121,7 +123,6 @@ async def crond_loop(users: list[str], fsimage: str):
     and executes matching jobs. Output is appended to /var/log/cron.log.
     """
     from bin.ash import run_command
-    from system.context import SystemContext
 
     while True:
         # Sleep until the next minute boundary
@@ -134,7 +135,10 @@ async def crond_loop(users: list[str], fsimage: str):
         for user in users:
             with SystemContext(user=user, fsimage=fsimage, interactive=False) as ctx:
                 from fs.providers import BinProvider
-                ctx.mount("sbin", BinProvider())
+                
+                SystemContext.current().mount("sbin", BinProvider())
+                SystemContext.current().mount("models", ModelProvider())
+                SystemContext.current().mount("tools", ToolsFolderProvider(ctx))
 
                 vault = ctx.fs()
                 jobs = collect_jobs(vault)

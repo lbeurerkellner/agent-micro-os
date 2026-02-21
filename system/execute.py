@@ -55,10 +55,9 @@ async def execute(ctx, filepath, *args):
         provider = ToolProvider(SystemContext.current())
         parsed = provider._parse_tool_file(contents)
 
-        args_str = " ".join(args) if args else ""
         try:
             result = await provider._execute_custom_tool(
-                vault_path.split("/")[-1], parsed, args_str, quiet=True, capture=False
+                vault_path.split("/")[-1], parsed, args, quiet=True, capture=False
             )
             if result:
                 cprint(result)

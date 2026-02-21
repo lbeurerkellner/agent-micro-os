@@ -217,7 +217,8 @@ def format_cost_bar(cost: float, limit: float, width: int = 30) -> str:
     pct = min(cost / limit, 1.0) if limit > 0 else 0.0
     filled = round(pct * width)
     bar = "█" * filled + "░" * (width - filled)
-    return f"{bar} {pct * 100:5.1f}%"
+    real_pct = (cost / limit) if limit > 0 else 0.0
+    return f"{bar} {real_pct * 100:5.1f}%"
 
 
 def format_usage(stats: dict, span_label: str, active_agents: list[dict] | None = None, cost_limit: float | None = None) -> str:

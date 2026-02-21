@@ -162,6 +162,8 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
     # parse --session <id> flag
     from system.session import VaultJSONSession
     session_id = None
+    
+    # prepare arguments
     filtered_args = []
     i = 0
     while i < len(args):
@@ -172,8 +174,12 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
             filtered_args.append(args[i])
             i += 1
     args = tuple(filtered_args)
+
+    # prepare session
+    is_new_session = False
     if session_id is None:
         session_id = str(uuid.uuid4())[:8]
+        is_new_session = True
     session = VaultJSONSession(session_id, context)
     
     # spinner setup
@@ -235,7 +241,13 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
             try:
                 # construct full prompt input
                 args_input = "" if len(args) == 0 else "\n\nThe user has now entered the following:\n" + " ".join(args)
-                prompt = "Working Directory: " + context.cwd + "\n\n" + program.prompt + args_input
+                prompt = "Working Directory: " + context.cwd + "\n\n"
+                
+                # depending on whether this is a new session, we re-include the original program prompt or not
+                if is_new_session:
+                    prompt += program.prompt + args_input
+                else:
+                    prompt += args_input
 
                 # write trace header immediately
                 trace_content = filepath + "\n"
