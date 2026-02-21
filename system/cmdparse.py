@@ -1,98 +1,191 @@
-"""Bash-like command tokenizer for ash shell.
+"""Shell command parser for ash.
 
-Handles quoted strings and escape sequences similar to bash.
+Tokenizes and parses command lines with support for:
+- Quoted strings (single and double quotes with escapes)
+- Command chaining: &&
+- Output redirection: > and >>
+- Background execution: &
 """
 
+from dataclasses import dataclass, field
 
-def cmdparse(cmd: str) -> list[str]:
-    """Tokenize a command string, handling quotes and escapes like bash.
 
-    Rules:
+@dataclass
+class Redirect:
+    """Output redirection target."""
+    target: str
+    append: bool = False
+
+
+@dataclass
+class ShellCommand:
+    """A single parsed command with its arguments and modifiers."""
+    args: list[str] = field(default_factory=list)
+    stdout: Redirect | None = None
+    background: bool = False
+
+
+# Operator token sentinels
+_OP_AND = "&&"
+_OP_GT = ">"
+_OP_APPEND = ">>"
+_OP_BG = "&"
+_OPERATORS = {_OP_AND, _OP_GT, _OP_APPEND, _OP_BG}
+
+
+def _tokenize(cmd: str) -> list[str]:
+    """Tokenize a command string into words and operator tokens.
+
+    Words follow bash-like quoting rules:
     - Single quotes: preserve everything literally (no escapes)
-    - Double quotes: allow escapes (\", \\, \n, \t, etc.)
+    - Double quotes: allow escapes (\\", \\\\, \\n, \\t, etc.)
     - Backslash outside quotes: escape next character
-    - Whitespace outside quotes: token separator
 
-    Examples:
-        'echo hello world' -> ['echo', 'hello', 'world']
-        'echo "hello world"' -> ['echo', 'hello world']
-        "echo 'hello world'" -> ['echo', 'hello world']
-        'echo "say \\"hi\\""' -> ['echo', 'say "hi"']
-        'echo hello\\ world' -> ['echo', 'hello world']
+    Operators (&&, >>, >, &) are emitted as distinct tokens.
+    Operators inside quotes are treated as regular text.
     """
-    tokens = []
-    current_token = []
+    tokens: list[str] = []
+    current: list[str] = []
     in_single_quote = False
     in_double_quote = False
     escaped = False
+
+    def flush():
+        if current:
+            tokens.append("".join(current))
+            current.clear()
 
     i = 0
     while i < len(cmd):
         char = cmd[i]
 
         if escaped:
-            # Process escape sequence
             if in_double_quote:
-                # In double quotes, handle common escapes
-                if char == 'n':
-                    current_token.append('\n')
-                elif char == 't':
-                    current_token.append('\t')
-                elif char == 'r':
-                    current_token.append('\r')
-                elif char == '\\':
-                    current_token.append('\\')
-                elif char == '"':
-                    current_token.append('"')
-                elif char == '$':
-                    current_token.append('$')
+                escape_map = {"n": "\n", "t": "\t", "r": "\r", "\\": "\\", '"': '"', "$": "$"}
+                if char in escape_map:
+                    current.append(escape_map[char])
                 else:
-                    # Unknown escape, keep backslash and char
-                    current_token.append('\\')
-                    current_token.append(char)
+                    current.append("\\")
+                    current.append(char)
             else:
-                # Outside quotes or in single quotes, escape next char literally
-                current_token.append(char)
+                current.append(char)
             escaped = False
             i += 1
             continue
 
-        if char == '\\':
-            if in_single_quote:
-                # Backslash is literal in single quotes
-                current_token.append(char)
-            else:
-                # Start escape sequence
-                escaped = True
+        if char == "\\" and not in_single_quote:
+            escaped = True
             i += 1
             continue
 
         if char == "'" and not in_double_quote:
-            # Toggle single quote mode
             in_single_quote = not in_single_quote
             i += 1
             continue
 
         if char == '"' and not in_single_quote:
-            # Toggle double quote mode
             in_double_quote = not in_double_quote
             i += 1
             continue
 
-        if char in (' ', '\t', '\n', '\r') and not in_single_quote and not in_double_quote:
-            # Whitespace outside quotes - token separator
-            if current_token:
-                tokens.append(''.join(current_token))
-                current_token = []
+        # Inside quotes — everything is literal
+        if in_single_quote or in_double_quote:
+            current.append(char)
             i += 1
             continue
 
-        # Regular character
-        current_token.append(char)
+        # Outside quotes — check for operators
+        if char == ">" and i + 1 < len(cmd) and cmd[i + 1] == ">":
+            flush()
+            tokens.append(_OP_APPEND)
+            i += 2
+            continue
+
+        if char == ">":
+            flush()
+            tokens.append(_OP_GT)
+            i += 1
+            continue
+
+        if char == "&" and i + 1 < len(cmd) and cmd[i + 1] == "&":
+            flush()
+            tokens.append(_OP_AND)
+            i += 2
+            continue
+
+        if char == "&":
+            flush()
+            tokens.append(_OP_BG)
+            i += 1
+            continue
+
+        if char in (" ", "\t", "\n", "\r"):
+            flush()
+            i += 1
+            continue
+
+        current.append(char)
         i += 1
 
-    # Add final token if any
-    if current_token:
-        tokens.append(''.join(current_token))
-
+    flush()
     return tokens
+
+
+def cmdparse(line: str) -> list[tuple[ShellCommand, str | None]]:
+    """Parse a command line into a list of (ShellCommand, connector) pairs.
+
+    The connector is '&&' between chained commands or None for the last command.
+
+    Examples:
+        "echo hello"
+          -> [(ShellCommand(args=['echo','hello']), None)]
+
+        "echo hello > out.txt && cat out.txt"
+          -> [(ShellCommand(args=['echo','hello'], stdout=Redirect('out.txt')), '&&'),
+              (ShellCommand(args=['cat','out.txt']), None)]
+
+        "sleep 10 &"
+          -> [(ShellCommand(args=['sleep','10'], background=True), None)]
+    """
+    tokens = _tokenize(line)
+    if not tokens:
+        return []
+
+    result: list[tuple[ShellCommand, str | None]] = []
+    cmd = ShellCommand()
+    i = 0
+
+    while i < len(tokens):
+        tok = tokens[i]
+
+        if tok == _OP_AND:
+            # Finalize current command, link with &&
+            if cmd.args:
+                result.append((cmd, "&&"))
+                cmd = ShellCommand()
+            i += 1
+            continue
+
+        if tok == _OP_BG:
+            cmd.background = True
+            i += 1
+            continue
+
+        if tok in (_OP_GT, _OP_APPEND):
+            # Next token is the redirect target
+            if i + 1 < len(tokens) and tokens[i + 1] not in _OPERATORS:
+                cmd.stdout = Redirect(target=tokens[i + 1], append=(tok == _OP_APPEND))
+                i += 2
+            else:
+                # Syntax error — treat > as literal
+                cmd.args.append(tok)
+                i += 1
+            continue
+
+        cmd.args.append(tok)
+        i += 1
+
+    if cmd.args or cmd.stdout or cmd.background:
+        result.append((cmd, None))
+
+    return result

@@ -509,34 +509,34 @@ def _format_results(
 
 async def run(*args):
     """Search file contents for lines matching a pattern."""
-    from system.context import SystemContext
+    from system.context import SystemContext, cprint
 
     ctx = SystemContext.current()
     if not ctx:
-        print("No context found. Please run this command within a SystemContext.")
+        cprint("No context found. Please run this command within a SystemContext.")
         return
 
     if not args:
-        print(_USAGE)
+        cprint(_USAGE)
         return
 
     try:
         opts, positional = _parse_args(args)
     except ValueError as exc:
-        print(f"grep: {exc}")
+        cprint(f"grep: {exc}")
         return
 
     # If no -e patterns were given, the first positional arg is the pattern
     if not opts.patterns:
         if not positional:
-            print(_USAGE)
+            cprint(_USAGE)
             return
         opts.patterns.append(positional.pop(0))
 
     try:
         regex = _compile_pattern(opts)
     except re.error as exc:
-        print(f"grep: invalid pattern: {exc}")
+        cprint(f"grep: invalid pattern: {exc}")
         return
 
     vault = ctx.fs()
@@ -550,11 +550,11 @@ async def run(*args):
         for farg in file_args:
             abs_path, vault_path = resolve_path(farg, ctx.cwd)
             if not vault.exists(vault_path) and not vault.is_dir(vault_path):
-                print(f"grep: {farg}: No such file or directory")
+                cprint(f"grep: {farg}: No such file or directory")
                 continue
             if vault.is_dir(vault_path):
                 if not opts.recursive:
-                    print(f"grep: {farg}: Is a directory")
+                    cprint(f"grep: {farg}: Is a directory")
                     continue
                 children = _collect_files_recursive(vault, abs_path)
                 children = _filter_files(children, opts)
@@ -578,7 +578,7 @@ async def run(*args):
             rel = vf[len(cwd_prefix):] if cwd_prefix and vf.startswith(cwd_prefix) else vf
             display_paths[vf] = "./" + rel
     else:
-        print(_USAGE)
+        cprint(_USAGE)
         return
 
     # Search each file
@@ -590,4 +590,4 @@ async def run(*args):
     # Format & print
     lines = _format_results(results, opts, display_paths)
     for line in lines:
-        print(line)
+        cprint(line)

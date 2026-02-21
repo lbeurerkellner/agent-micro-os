@@ -1,3 +1,6 @@
+from system.context import cprint
+
+
 async def run(*args, env: dict = None, readonly=False, quiet=False, capture=False):
     """Launch a Docker container with vault contents mounted as a volume.
 
@@ -21,12 +24,12 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
 
     import docker
 
-    from system.context import SystemContext
+    from system.context import SystemContext, cprint
     from fs.vault import Vault
 
     ctx = SystemContext.current()
     if not ctx:
-        print("sandbox: no context")
+        cprint("sandbox: no context")
         return
 
     # Parse args
@@ -56,7 +59,7 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
             prefix = args[i]
             i += 1
         else:
-            print(f"sandbox: unknown option '{args[i]}'")
+            cprint(f"sandbox: unknown option '{args[i]}'")
             return
 
     vault = Vault(ctx.fsimage, ctx.user)
@@ -64,7 +67,7 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
     # Export
     tar_buf, snapshot = _export_to_tar(vault, prefix, uid=uid, gid=uid)
     if not quiet:
-        print(f"Exported {len(snapshot)} files")
+        cprint(f"Exported {len(snapshot)} files")
 
     client = docker.from_env()
     vol_name = f"vault-{uuid.uuid4().hex[:12]}"
@@ -85,7 +88,7 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
 
         # Launch container
         if not quiet:
-            print(f"Launching {image}...")
+            cprint(f"Launching {image}...")
         docker_args = ["docker", "run", "--rm", "-it",
                         "-v", f"{vol_name}:{mount}", "-w", mount,
                         *env_args,
@@ -104,18 +107,18 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
             exit_code = result.returncode
             output = result.stdout + result.stderr
             if not quiet:
-                print(output)
+                cprint(output)
 
         # Diff and commit
         current = _read_volume(client, vol_name)
         if readonly:
             if not quiet:
-                print("Discarding changes (--readonly mode).")
+                cprint("Discarding changes (--readonly mode).")
             if capture:
                 return f"{output}\n[exit code: {exit_code}]"
             else:
                 return exit_code == 0
-        _diff_and_commit(vault, snapshot, current, prefix)
+        _diff_and_commit(vault, snapshot, current, prefix, quiet=quiet)
 
         if capture:
             return f"{output}\n[exit code: {exit_code}]"
@@ -124,7 +127,7 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
     finally:
         vol.remove()
         if not quiet:
-            print(f"Volume {vol_name} removed")
+            cprint(f"Volume {vol_name} removed")
 
 
 def _export_to_tar(vault, prefix, uid=0, gid=0):
@@ -201,16 +204,18 @@ def _read_volume(client, vol_name):
         temp.remove()
 
 
-def _diff_and_commit(vault, snapshot, current, prefix):
+def _diff_and_commit(vault, snapshot, current, prefix, quiet=False):
     added = set(current) - set(snapshot)
     removed = set(snapshot) - set(current)
     modified = {k for k in current if k in snapshot and current[k] != snapshot[k]}
 
     if not added and not removed and not modified:
-        print("No changes.")
+        if not quiet:
+            cprint("No changes.")
         return
 
-    print(f"{len(added)} added, {len(modified)} modified, {len(removed)} removed")
+    if not quiet:
+        cprint(f"{len(added)} added, {len(modified)} modified, {len(removed)} removed")
 
     vault_prefix = (prefix.strip("/") + "/") if prefix else ""
 
@@ -220,4 +225,6 @@ def _diff_and_commit(vault, snapshot, current, prefix):
     for fp in removed:
         vault.delete(vault_prefix + fp)
     vault.end_commit(f"sandbox: +{len(added)} ~{len(modified)} -{len(removed)}")
-    print("Committed.")
+    
+    if not quiet:
+        cprint("Committed.")

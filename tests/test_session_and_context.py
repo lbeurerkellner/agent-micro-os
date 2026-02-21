@@ -4,7 +4,6 @@ import asyncio
 import io
 import json
 import pytest
-from contextlib import redirect_stdout
 
 from system.context import SystemContext
 from system.session import VaultJSONSession

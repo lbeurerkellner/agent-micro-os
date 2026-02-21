@@ -1,5 +1,6 @@
 import asyncio
 import importlib.util
+import io
 import os
 import readline
 import signal
@@ -7,9 +8,10 @@ from pathlib import Path
 
 import termcolor
 
-from system.context import SystemContext
+from system.context import SystemContext, cprint
 from system.execute import execute
 from system.cmdparse import cmdparse
+from fs.utils import resolve_path
 
 import argparse
 
@@ -21,89 +23,123 @@ async def run_script(contents: str):
             continue  # Skip empty lines and comments
         await run_command(line)
 
+async def _exec_one(cmd_obj):
+    """Execute a single ShellCommand. Returns True on success, False on error."""
+    ctx = SystemContext.current()
+    command = cmd_obj.args[0]
+    args = cmd_obj.args[1:]
+
+    # Search PATH for the command on the virtual filesystem
+    vfs = ctx.fs()
+    found_path = None
+
+    # check search paths
+    for path_dir in ctx.path:
+        candidate = path_dir.strip('/') + '/' + command
+        if vfs.exists(candidate) and not vfs.is_dir(candidate):
+            found_path = "/" + candidate
+            break
+
+    # try to resolve as relative path
+    if found_path is None:
+        candidate = (ctx.cwd.strip('/') + '/' + command).lstrip('/')
+        if vfs.exists(candidate) and not vfs.is_dir(candidate):
+            found_path = candidate
+        elif command.startswith('./'):
+            candidate = (ctx.cwd.strip('/') + '/' + command[2:]).lstrip('/')
+            if vfs.exists(candidate) and not vfs.is_dir(candidate):
+                found_path = candidate
+
+    if found_path is None:
+        cprint(f"ash: command not found: {command}")
+        return False
+
+    # Built-in commands live under sbin/ (mounted from bin/)
+    if found_path.startswith('/sbin/'):
+        # strip away the sbin/ prefix to get the module name
+        found_path = found_path[len('/sbin/'):]
+        command = found_path
+        # load and run the command module from bin/
+        bin_dir = Path(__file__).parent
+        module_path = bin_dir / f"{command}.py"
+
+        try:
+            spec = importlib.util.spec_from_file_location(command, module_path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            if hasattr(module, "run"):
+                await module.run(*args)
+            else:
+                cprint(f"ash: {command} module has no run() function")
+                return False
+        except Exception as e:
+            cprint(f"ash: error running {command}: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    else:
+        await execute(ctx, found_path, *args)
+
+    return True
+
+
 async def run_command(user_input: str):
     """Execute command(s) and return True if should continue loop, False to exit.
 
-    Supports && for chaining commands - stops execution if any command fails.
-    Commands are resolved by searching the system PATH on the virtual filesystem.
-    Built-in commands (under /sbin) are imported and run as Python modules.
+    Supports:
+    - && for chaining commands (stops on failure)
+    - > and >> for output redirection to files
+    - & for background execution
     """
-    # Strip whitespace
     user_input = user_input.strip()
-
-    # Skip empty input
     if not user_input:
         return True
 
-    # Split on && for command chaining
-    commands = [cmd.strip() for cmd in user_input.split('&&')]
+    pipeline = cmdparse(user_input)
+    if not pipeline:
+        return True
 
     ctx = SystemContext.current()
 
-    # Execute each command in sequence
-    for cmd in commands:
-        if not cmd:
+    for cmd_obj, connector in pipeline:
+        if not cmd_obj.args:
             continue
 
-        # Parse command (first word) and arguments using bash-like tokenizer
-        parts = cmdparse(cmd)
-        if not parts:
+        # Handle output redirection: capture stdout into a buffer
+        if cmd_obj.stdout:
+            stdout_buf = io.StringIO()
+            with ctx.child(stdout=stdout_buf, interactive=False):
+                if cmd_obj.background:
+                    async def _bg_redirect(cmd, buf):
+                        await _exec_one(cmd)
+                        output = buf.getvalue()
+                        _, vp = resolve_path(cmd.stdout.target, SystemContext.current().cwd)
+                        mode = "a" if cmd.stdout.append else None
+                        SystemContext.current().fs().write(vp, output.encode("utf-8"), mode=mode)
+                    task = asyncio.create_task(_bg_redirect(cmd_obj, stdout_buf))
+                    ctx.register_background_task(task)
+                    continue
+
+                ok = await _exec_one(cmd_obj)
+
+            # Write captured output to redirect target
+            output = stdout_buf.getvalue()
+            _, vault_path = resolve_path(cmd_obj.stdout.target, ctx.cwd)
+            mode = "a" if cmd_obj.stdout.append else None
+            ctx.fs().write(vault_path, output.encode("utf-8"), mode=mode)
+        elif cmd_obj.background:
+            async def _bg(cmd):
+                await _exec_one(cmd)
+            task = asyncio.create_task(_bg(cmd_obj))
+            ctx.register_background_task(task)
             continue
-        command = parts[0]
-        args = parts[1:]
-
-        # Search PATH for the command on the virtual filesystem
-        vfs = ctx.fs()
-        found_path = None
-        
-        # check search paths
-        for path_dir in ctx.path:
-            candidate = path_dir.strip('/') + '/' + command
-            if vfs.exists(candidate) and not vfs.is_dir(candidate):
-                found_path = "/" + candidate
-                break
-
-        # try to resolve as relative path
-        if found_path is None:
-            candidate = (ctx.cwd.strip('/') + '/' + command).lstrip('/')
-            if vfs.exists(candidate) and not vfs.is_dir(candidate):
-                found_path = candidate
-            elif command.startswith('./'):
-                candidate = (ctx.cwd.strip('/') + '/' + command[2:]).lstrip('/')
-                if vfs.exists(candidate) and not vfs.is_dir(candidate):
-                    found_path = candidate
-
-        if found_path is None:
-            print(f"ash: command not found: {command}")
-            break  # Stop chain on error
-
-        # Built-in commands live under sbin/ (mounted from bin/)
-        if found_path.startswith('/sbin/'):
-            # strip away the sbin/ prefix to get the module name
-            found_path = found_path[len('/sbin/'):]
-            command = found_path
-            # load and run the command module from bin/
-            bin_dir = Path(__file__).parent
-            module_path = bin_dir / f"{command}.py"
-
-            try:
-                spec = importlib.util.spec_from_file_location(command, module_path)
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-
-                if hasattr(module, "run"):
-                    await module.run(*args)
-                else:
-                    print(f"ash: {command} module has no run() function")
-                    break  # Stop chain on error
-            except Exception as e:
-                print(f"ash: error running {command}: {e}")
-                import traceback
-                traceback.print_exc()
-                break  # Stop chain on error
         else:
-            await execute(ctx, found_path, *args)
-            break  # Stop chain on error
+            ok = await _exec_one(cmd_obj)
+
+        # For &&, stop chain if command failed
+        if connector == "&&" and not ok:
+            break
 
     return True
 
@@ -242,9 +278,9 @@ def create_completer(ctx, debug=False):
                 completion_cache['matches'] = sorted(matches)  # Sort for consistent ordering
 
                 if debug:
-                    print(f"\n[DEBUG] Completing: '{text}' (position: {begin_idx})")
-                    print(f"[DEBUG] CWD: {ctx.cwd}")
-                    print(f"[DEBUG] Matches ({len(matches)}): {matches[:10]}")  # Show first 10
+                    cprint(f"\n[DEBUG] Completing: '{text}' (position: {begin_idx})", file=ctx.stderr)
+                    cprint(f"[DEBUG] CWD: {ctx.cwd}", file=ctx.stderr)
+                    cprint(f"[DEBUG] Matches ({len(matches)}): {matches[:10]}", file=ctx.stderr)  # Show first 10
 
             # Return the state-th match
             matches = completion_cache['matches']
@@ -256,7 +292,7 @@ def create_completer(ctx, debug=False):
         except Exception as e:
             # In debug mode, show the error
             if debug:
-                print(f"\n[DEBUG] Completer error: {e}")
+                cprint(f"\n[DEBUG] Completer error: {e}", file=ctx.stderr)
                 import traceback
                 traceback.print_exc()
             return None
@@ -267,24 +303,29 @@ def create_completer(ctx, debug=False):
 HISTORY_PATH = "/etc/history"
 
 
+_history_offset = 0  # readline index after loading; new commands start after this
+
+
 def load_history(ctx):
     """Load command history from vaultfs into readline."""
+    global _history_offset
     content = ctx.read(HISTORY_PATH)
     if content:
         for line in content.splitlines():
             if line:
                 readline.add_history(line)
+    _history_offset = readline.get_current_history_length()
 
 
 def save_history(ctx):
-    """Save readline history to vaultfs."""
-    lines = []
-    for i in range(1, readline.get_current_history_length() + 1):
+    """Append only the new commands from this session to the history file."""
+    new_lines = []
+    for i in range(_history_offset + 1, readline.get_current_history_length() + 1):
         item = readline.get_history_item(i)
         if item:
-            lines.append(item)
-    if lines:
-        ctx.fs().write(HISTORY_PATH, '\n'.join(lines).encode('utf-8'))
+            new_lines.append(item)
+    if new_lines:
+        ctx.fs().write(HISTORY_PATH, ('\n'.join(new_lines) + '\n').encode('utf-8'), mode="a")
 
 
 def setup_readline(ctx, debug=False):
@@ -309,9 +350,9 @@ def setup_readline(ctx, debug=False):
     readline.set_completer_delims(delims)
 
     if debug:
-        print("[DEBUG] Readline configured:")
-        print(f"[DEBUG]   Library: {'libedit' if 'libedit' in str(readline.__doc__) else 'GNU readline'}")
-        print(f"[DEBUG]   Delimiters: {repr(delims)}")
+        cprint("[DEBUG] Readline configured:", file=ctx.stderr)
+        cprint(f"[DEBUG]   Library: {'libedit' if 'libedit' in str(readline.__doc__) else 'GNU readline'}", file=ctx.stderr)
+        cprint(f"[DEBUG]   Delimiters: {repr(delims)}", file=ctx.stderr)
 
 
 async def loop(user: str, fsimage: str, command: str = None, debug: bool = False, cost_limit: float | None = None):
@@ -325,13 +366,16 @@ async def loop(user: str, fsimage: str, command: str = None, debug: bool = False
     """
     with SystemContext(user=user, fsimage=fsimage, debug=debug, interactive=True, cost_limit=cost_limit) as ctx:
         # Mount built-in commands as /sbin
-        from fs.providers import BinProvider, ModelProvider, ProcProvider, ToolsFolderProvider
+        from fs.providers import BinProvider, ModelProvider, ToolsFolderProvider
 
         # Mount standard folders
         SystemContext.current().mount("sbin", BinProvider())
         SystemContext.current().mount("models", ModelProvider())
         SystemContext.current().mount("tools", ToolsFolderProvider(ctx))
-        SystemContext.current().mount("proc", ProcProvider(ctx._agents))
+
+        # Start cron daemon as a background task
+        from system.crond import start_crond
+        crond_task = start_crond([user], fsimage)
 
         # Non-interactive mode: run single command and exit
         if command:
@@ -341,8 +385,8 @@ async def loop(user: str, fsimage: str, command: str = None, debug: bool = False
         # Interactive mode: REPL
         await run_script(ctx.read("/etc/profile", "echo ash v0.1 - Agent Shell"))
         if debug:
-            print("[DEBUG MODE ENABLED]")
-        print()
+            cprint("[DEBUG MODE ENABLED]", file=ctx.stderr)
+        cprint()
 
         # Set up tab completion (pass ctx directly since contextvars don't work in executor threads)
         setup_readline(ctx, debug=debug)
@@ -350,17 +394,17 @@ async def loop(user: str, fsimage: str, command: str = None, debug: bool = False
         # Load command history from vaultfs
         load_history(ctx)
         if debug:
-            print(f"[DEBUG] History loaded: {readline.get_current_history_length()} entries")
+            cprint(f"[DEBUG] History loaded: {readline.get_current_history_length()} entries", file=ctx.stderr)
 
         # Show initial file count in debug mode
         if debug:
             ctx = SystemContext.current()
             vault = ctx.fs()
             files = vault.list()
-            print(f"[DEBUG] Vault has {len(files)} files")
+            cprint(f"[DEBUG] Vault has {len(files)} files", file=ctx.stderr)
             if files:
-                print(f"[DEBUG] Sample files: {files[:5]}")
-            print()
+                cprint(f"[DEBUG] Sample files: {files[:5]}", file=ctx.stderr)
+            cprint(file=ctx.stderr)
 
         ev_loop = asyncio.get_running_loop()
         stop = asyncio.Event()
@@ -386,13 +430,13 @@ async def loop(user: str, fsimage: str, command: str = None, debug: bool = False
                     p.cancel()
 
                 if stop.is_set():
-                    print()
+                    cprint()
                     break
 
                 try:
                     user_input = input_task.result()
                 except EOFError:
-                    print()
+                    cprint()
                     break
 
                 should_continue = await run_command(user_input)

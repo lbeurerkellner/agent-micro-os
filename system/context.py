@@ -1,20 +1,11 @@
 """SystemContext with contextvar-based stacking for async support."""
 
+import sys
 from contextvars import ContextVar
-from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, TextIO
 
 from fs.overlay import FolderProvider, OverlayFS
 from fs.vault import Vault
-
-
-@dataclass
-class AgentProcess:
-    """An active agent process tracked in /proc."""
-
-    pid: str          # UUID
-    program: str      # filepath of the program being run
-    trajectory: str   # path to trajectory file
 
 
 # Global context var storing a stack of SystemContexts
@@ -42,7 +33,7 @@ class SystemContext:
     path: list[str] # system PATH for command resolution
     interactive: bool = False # whether we're in an interactive session (e.g. ash)
 
-    def __init__(self, user: str, fsimage: str, debug: bool = False, interactive: bool = False, cost_limit: float | None = None):
+    def __init__(self, user: str, fsimage: str, debug: bool = False, interactive: bool = False, cost_limit: float | None = None, stdout: TextIO | None = None, stderr: TextIO | None = None):
         self.user = user
         self.fsimage = fsimage
         self.debug = debug
@@ -50,11 +41,13 @@ class SystemContext:
         # maximum USD cost allowed per 24h window (None = no limit)
         self.cost_limit: float | None = cost_limit
 
+        self.stdout: TextIO = stdout or sys.stdout
+        self.stderr: TextIO = stderr or sys.stderr
+
         self.path = ['/sbin', '/bin']
 
         self.cwd = '/'
         self._mounts: dict[str, FolderProvider] = {}
-        self._agents: dict[str, AgentProcess] = {}
         # set of asyncio background tasks for tracking purposes (to enable clean up)
         self._background_tasks = set()
 
@@ -78,12 +71,16 @@ class SystemContext:
         self._background_tasks.add(task)
 
     def register_agent(self, pid: str, program: str, trajectory: str):
-        """Register an active agent process."""
-        self._agents[pid] = AgentProcess(pid=pid, program=program, trajectory=trajectory)
+        """Register an active agent process by writing to /proc/{pid} in the vault."""
+        entry = f"<agent '{program}' trajectory='{trajectory}'> running"
+        self.fs().write(f"proc/{pid}", entry.encode())
 
     def unregister_agent(self, pid: str):
         """Remove an agent process (completed, cancelled, or failed)."""
-        self._agents.pop(pid, None)
+        try:
+            self.fs().delete(f"proc/{pid}")
+        except FileNotFoundError:
+            pass
 
     def fs(self) -> OverlayFS:
         """Get an OverlayFS instance wrapping the vault with any registered mounts."""
@@ -112,11 +109,12 @@ class SystemContext:
             fsimage=kwargs.get('fsimage', self.fsimage),
             debug=kwargs.get('debug', self.debug),
             interactive=kwargs.get('interactive', self.interactive),
+            stdout=kwargs.get('stdout', self.stdout),
+            stderr=kwargs.get('stderr', self.stderr),
         )
         c.path = kwargs.get('path', self.path.copy())
         c.cwd = kwargs.get('cwd', self.cwd)
         c._mounts = kwargs.get('mounts', self._mounts.copy())
-        c._agents = kwargs.get('agents', self._agents.copy())
         c._background_tasks = kwargs.get('background_tasks', self._background_tasks.copy())
         c.cost_limit = kwargs.get('cost_limit', self.cost_limit)
         return c
@@ -130,3 +128,19 @@ class SystemContext:
         """
         stack = _context_stack.get()
         return stack[-1] if stack else None
+
+
+def cprint(*args, end="\n", flush=False, file=None, **kwargs):
+    """Print to the current context's stdout (or stderr via file=ctx.stderr).
+
+    Drop-in replacement for print() that routes output through the
+    active SystemContext's streams instead of the process-global sys.stdout.
+    """
+    ctx = SystemContext.current()
+    if file is not None:
+        target = file
+    elif ctx is not None:
+        target = ctx.stdout
+    else:
+        target = sys.stdout
+    print(*args, end=end, flush=flush, file=target, **kwargs)

@@ -1,11 +1,11 @@
 async def run(*args):
     """Change the current directory."""
-    from system.context import SystemContext
+    from system.context import SystemContext, cprint
     import os
 
     ctx = SystemContext.current()
     if not ctx:
-        print("No context found. Please run this command within a SystemContext.")
+        cprint("No context found. Please run this command within a SystemContext.")
         return
 
     # without args, go to /
@@ -38,11 +38,11 @@ async def run(*args):
 
     vault = ctx.fs()
     if not vault.exists(vault_path):
-        print(f"Directory '{target_path}' does not exist.")
+        cprint(f"Directory '{target_path}' does not exist.")
         return
 
     if not vault.is_dir(vault_path):
-        print(f"'{target_path}' is not a directory.")
+        cprint(f"'{target_path}' is not a directory.")
         return
 
     ctx.cwd = target_path

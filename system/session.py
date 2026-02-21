@@ -62,11 +62,7 @@ class VaultJSONSession(SessionABC):
     async def add_items(self, items: list) -> None:
         async with self._lock:
             chunk = "".join(json.dumps(item) + "\n" for item in items)
-            try:
-                existing = self._ctx.fs().read(self._path)
-            except FileNotFoundError:
-                existing = b""
-            self._ctx.fs().write(self._path, existing + chunk.encode("utf-8"), mode="a")
+            self._ctx.fs().write(self._path, chunk.encode("utf-8"), mode="a")
 
     async def pop_item(self):
         async with self._lock:

@@ -3,9 +3,9 @@ import json
 import signal
 import sys
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from fs.providers import ModelProvider
-from system.context import SystemContext
+from system.context import SystemContext, cprint
 from system.tools import ToolProvider
 from termcolor import colored
 
@@ -151,8 +151,6 @@ async def run(program: Program, filepath: str, *args):
     assert models.has_provider(provider), f"{provider} provider is not available. Please make sure /etc/model/default points to a model that is currently available (/models/<provider>/<model>)"
     assert models.has_model(provider, model), f"{model} model from {provider} provider is not available. Currently available models are {models.list()}. You may need to update your /etc/model/default to point to an available model."
 
-    assert provider == "openai", f"Only openai provider is supported for now, but {provider} was requested. Please make sure /etc/model/default contains 'openai <model>' and that this provider is available in /models/{provider}/"
-
     # construct the agent
     agent = Agent(name=filepath, instructions=system_prompt, tools=[function_tool(t) for t in program.tools], model=model, model_settings=ModelSettings(reasoning={"effort": reasoning_effort}))
 
@@ -161,11 +159,6 @@ async def run(program: Program, filepath: str, *args):
 
 
 async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Program, filepath: str, model_configuration: str, *args):
-    # check if background agent
-    is_background = len(args) > 0 and args[-1] == "&"
-    if is_background:
-        args = args[:-1]
-
     # parse --session <id> flag
     from system.session import VaultJSONSession
     session_id = None
@@ -192,13 +185,13 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
         i = 0
         try:
             while True:
-                sys.stderr.write(f"\r{spinner_chars[i % len(spinner_chars)]} {msg}")
-                sys.stderr.flush()
+                context.stderr.write(f"\r{spinner_chars[i % len(spinner_chars)]} {msg}")
+                context.stderr.flush()
                 i += 1
                 await asyncio.sleep(0.08)
         except asyncio.CancelledError:
-            sys.stderr.write("\r\033[K")
-            sys.stderr.flush()
+            context.stderr.write("\r\033[K")
+            context.stderr.flush()
 
     async def stop_spinner():
         nonlocal spinner_task
@@ -211,18 +204,18 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
         spinner_task = None
 
     def start_spinner(msg=""):
-        nonlocal spinner_task, is_background
-        if not is_background:
+        nonlocal spinner_task
+        if context.interactive:
             spinner_task = asyncio.create_task(spin(msg))
 
     # output setup
-    def print_output(text="", end="\n", flush=False, file=sys.stdout):
-        if not is_background:
-            print(text, end=end, flush=flush, file=file)
-        else:
-            # for background agents, write output to a file in /var/trajectories/<call_id>.out
-            output_path = f"/var/trajectories/{call_id}.out"
-            context.fs().write(output_path, (text + end).encode(), mode="a")
+    def print_output(text="", end="\n", flush=False, file=None):
+        if file is None:
+            file = context.stdout
+        # suppress stderr chrome (spinner, tool calls, session) when not interactive
+        if not context.interactive and file is context.stderr:
+            return
+        cprint(text, end=end, flush=flush, file=file)
 
     # trace file setup
     call_id = str(uuid.uuid4())
@@ -241,7 +234,7 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
             total_output = 0
             try:
                 # construct full prompt input
-                args_input = "" if len(args) == 0 else "\n\nExtra Input:\n" + " ".join(args)
+                args_input = "" if len(args) == 0 else "\n\nThe user has now entered the following:\n" + " ".join(args)
                 prompt = "Working Directory: " + context.cwd + "\n\n" + program.prompt + args_input
 
                 # write trace header immediately
@@ -267,7 +260,7 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
                             print_output(
                                 f"Cost limit of ${context.cost_limit:.4f}/24h exceeded "
                                 f"(${used:.4f} used). Blocking execution.",
-                                file=sys.stderr,
+                                file=context.stderr,
                             )
                             break
 
@@ -292,7 +285,7 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
                                 trace_write(trace_content)
                                 # display: truncated
                                 display = (full_output if len(full_output) <= 200 else full_output[:200]).replace("\n", "⏎ ") + "..."
-                                print_output(colored(f"  -> {display}", 'dark_grey'), file=sys.stderr)
+                                print_output(colored(f"  -> {display}", 'dark_grey'), file=context.stderr)
                                 start_spinner()
                             continue
 
@@ -319,7 +312,7 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
                             await stop_spinner()
                             name = raw.name or tool_names.get(raw.item_id, "?")
                             args_display = raw.arguments if len(raw.arguments) <= 200 else raw.arguments[:200] + "..."
-                            print_output(colored(f"[{name}", 'dark_grey', attrs=['bold']) + colored(f"({args_display})]", 'dark_grey'), file=sys.stderr)
+                            print_output(colored(f"[{name}", 'dark_grey', attrs=['bold']) + colored(f"({args_display})]", 'dark_grey'), file=context.stderr)
                             # trace: tool call
                             trace_content += json.dumps({"type": "tool_call", "name": name, "arguments": raw.arguments}) + "\n"
                             trace_write(trace_content)
@@ -356,7 +349,8 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
                     md.end()
                     print_output()  # newline after turn
 
-                    if not program.is_interactive:
+                    # if not interactive, don't prompt for more input and just exit after one run
+                    if not program.is_interactive or not context.interactive:
                         break
 
                     # prompt for next user input
@@ -376,7 +370,7 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
                     trace_content += json.dumps({"type": "user_input", "text": prompt}) + "\n"
                     trace_write(trace_content)
 
-                print_output(colored(f"\nsession: {session_id}", "dark_grey"), file=sys.stderr)
+                print_output(colored(f"\nsession: {session_id}", "dark_grey"), file=context.stderr)
             except Exception as e:
                 await stop_spinner()
                 trace_content += ".ERROR\n" + str(e) + "\n"
@@ -394,30 +388,26 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
         # create separate task for agent execution
         task = asyncio.create_task(agent_task())
 
-        if not is_background:
-            # install SIGINT handler to cancel the running task on ctrl-c
-            loop = asyncio.get_running_loop()
-            cancelled_by_user = False
+        # install SIGINT handler to cancel the running task on ctrl-c
+        loop = asyncio.get_running_loop()
+        cancelled_by_user = False
 
-            def on_sigint():
-                nonlocal cancelled_by_user
-                cancelled_by_user = True
-                task.cancel()
+        def on_sigint():
+            nonlocal cancelled_by_user
+            cancelled_by_user = True
+            task.cancel()
 
-            loop.add_signal_handler(signal.SIGINT, on_sigint)
-            try:
-                await task
-            except asyncio.CancelledError:
-                await stop_spinner()
-                if cancelled_by_user:
-                    print_output("\nInterrupted.", file=sys.stderr)
-                    print_output(colored(f"session: {session_id}", "dark_grey"), file=sys.stderr)
-                context.unregister_agent(call_id)
-            finally:
-                loop.remove_signal_handler(signal.SIGINT)
-        else:
-            # move it to the background
-            context.register_background_task(task)
+        loop.add_signal_handler(signal.SIGINT, on_sigint)
+        try:
+            await task
+        except asyncio.CancelledError:
+            await stop_spinner()
+            if cancelled_by_user:
+                print_output("\nInterrupted.", file=context.stderr)
+                print_output(colored(f"session: {session_id}", "dark_grey"), file=context.stderr)
+            context.unregister_agent(call_id)
+        finally:
+            loop.remove_signal_handler(signal.SIGINT)
     except Exception as e:
         # make sure to unregister from /proc in case of any setup errors
         context.unregister_agent(call_id)

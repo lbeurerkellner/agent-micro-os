@@ -28,15 +28,15 @@ def _find_files(vault, path: str) -> list[str]:
 
 async def run(*args):
     """Recursively list files under a directory."""
-    from system.context import SystemContext
+    from system.context import SystemContext, cprint
 
     ctx = SystemContext.current()
     if not ctx:
-        print("No context found. Please run this command within a SystemContext.")
+        cprint("No context found. Please run this command within a SystemContext.")
         return
 
     if len(args) > 1:
-        print("Usage: find [DIRECTORY]")
+        cprint("Usage: find [DIRECTORY]")
         return
 
     vault = ctx.fs()
@@ -50,7 +50,7 @@ async def run(*args):
         cwd_prefix = (cwd + '/') if cwd else ''
         for entry in entries:
             rel = entry[len(cwd_prefix):] if cwd_prefix else entry
-            print(f"./{rel}")
+            cprint(f"./{rel}")
     else:
         # Argument given: resolve path, display relative to user's argument
         arg = args[0]
@@ -61,4 +61,4 @@ async def run(*args):
         arg_prefix = arg.strip('/') + '/' if arg.strip('/') else ''
         for entry in entries:
             rel = entry[len(vault_prefix):] if vault_prefix else entry
-            print(f"{arg_prefix}{rel}")
+            cprint(f"{arg_prefix}{rel}")

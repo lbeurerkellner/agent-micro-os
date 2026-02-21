@@ -317,15 +317,15 @@ def main() -> None:
     import sys
 
     if len(sys.argv) < 4:
-        print("Usage: python -m fs.vaultfs <vault_db> <user> <mountpoint>")
-        print("Example: python -m fs.vaultfs /data/vault.db alice /mnt/vault")
+        print("Usage: python -m fs.vaultfs <vault_db> <user> <mountpoint>")  # no-ctx-print
+        print("Example: python -m fs.vaultfs /data/vault.db alice /mnt/vault")  # no-ctx-print
         sys.exit(1)
 
     vault_path = sys.argv[1]
     user = sys.argv[2]
     mountpoint = sys.argv[3]
 
-    print(f"Mounting vault '{vault_path}' for user '{user}' at '{mountpoint}'...")
+    print(f"Mounting vault '{vault_path}' for user '{user}' at '{mountpoint}'...")  # no-ctx-print
     mount(vault_path, user, mountpoint)
 
 

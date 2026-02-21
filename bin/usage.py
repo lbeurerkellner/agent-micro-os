@@ -110,7 +110,7 @@ def aggregate(trajectories: list[dict]) -> dict:
     for t in trajectories:
         total_input += t["input_tokens"]
         total_output += t["output_tokens"]
-        total_cost += compute_cost(t.get("model", ""), t["input_tokens"], t["output_tokens"])
+        total_cost += compute_cost(t.get("model") or "", t["input_tokens"], t["output_tokens"])
         if t["status"] == "completed":
             completed += 1
         elif t["status"] == "error":
@@ -272,26 +272,26 @@ def format_usage(stats: dict, span_label: str, active_agents: list[dict] | None 
 
 async def run(*args):
     """Show usage statistics from trajectory files."""
-    from system.context import SystemContext
+    from system.context import SystemContext, cprint
 
     ctx = SystemContext.current()
     if not ctx:
-        print("No context found. Please run this command within a SystemContext.")
+        cprint("No context found. Please run this command within a SystemContext.")
         return
 
     if len(args) > 1:
-        print("Usage: usage [TIMESPAN]")
-        print("  TIMESPAN: e.g. 30m, 24h, 7d (default: 24h)")
+        cprint("Usage: usage [TIMESPAN]")
+        cprint("  TIMESPAN: e.g. 30m, 24h, 7d (default: 24h)")
         return
 
     span_str = args[0] if args else "24h"
     try:
         span = parse_timespan(span_str)
     except ValueError as e:
-        print(str(e))
+        cprint(str(e))
         return
 
     vault = ctx.fs()
     stats = collect_usage(vault, span)
     active_agents = collect_active_agents(vault)
-    print(format_usage(stats, span_str, active_agents, cost_limit=ctx.cost_limit))
+    cprint(format_usage(stats, span_str, active_agents, cost_limit=ctx.cost_limit))

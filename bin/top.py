@@ -212,11 +212,11 @@ def format_table(processes: list[dict]) -> list[tuple[str, str]]:
 async def run(*args):
     """Show live view of active agent processes."""
     import asyncio
-    from system.context import SystemContext
+    from system.context import SystemContext, cprint
 
     ctx = SystemContext.current()
     if not ctx:
-        print("No context found. Please run this command within a SystemContext.")
+        cprint("No context found. Please run this command within a SystemContext.")
         return
 
     vault = ctx.fs()

@@ -18,20 +18,20 @@ def edit_with_vim(initial_text=""):
 
 async def run(*args):
     """Edit a file using vim."""
-    from system.context import SystemContext
+    from system.context import SystemContext, cprint
     from fs.utils import resolve_path
 
     ctx = SystemContext.current()
     if not ctx:
-        print("No context found. Please run this command within a SystemContext.")
+        cprint("No context found. Please run this command within a SystemContext.")
         return
 
     if len(args) == 0:
-        print("Usage: vim <file>")
+        cprint("Usage: vim <file>")
         return
 
     if len(args) > 1:
-        print("vim: only single file editing is supported")
+        cprint("vim: only single file editing is supported")
         return
 
     vault = ctx.fs()
@@ -45,7 +45,7 @@ async def run(*args):
     if vault.exists(vault_path):
         # Check if it's a directory
         if vault.is_dir(vault_path):
-            print(f"vim: {filepath}: Is a directory")
+            cprint(f"vim: {filepath}: Is a directory")
             return
 
         # Read existing file content
@@ -54,10 +54,10 @@ async def run(*args):
             try:
                 initial_content = content_bytes.decode('utf-8')
             except UnicodeDecodeError:
-                print(f"vim: {filepath}: Cannot edit binary file")
+                cprint(f"vim: {filepath}: Cannot edit binary file")
                 return
         except Exception as e:
-            print(f"vim: {filepath}: Error reading file: {e}")
+            cprint(f"vim: {filepath}: Error reading file: {e}")
             return
 
     # Edit with vim
@@ -67,4 +67,4 @@ async def run(*args):
         # Write back to vault
         vault.write(vault_path, edited_content.encode('utf-8'))
     except Exception as e:
-        print(f"vim: {filepath}: Error: {e}")
+        cprint(f"vim: {filepath}: Error: {e}")

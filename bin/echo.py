@@ -1,2 +1,3 @@
 async def run(*args):
-    print(' '.join(args))
+    from system.context import cprint
+    cprint(' '.join(args))

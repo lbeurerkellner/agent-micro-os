@@ -1,6 +1,7 @@
 from fs.utils import resolve_path
 from fs.overlay import OverlayFS
 
+from system.context import cprint
 from system.program import parse, run
 
 async def execute(ctx, filepath, *args):
@@ -11,19 +12,19 @@ async def execute(ctx, filepath, *args):
 
     # Check if file exists
     if not vault.exists(vault_path):
-        print(f"{filepath}: No such file or directory")
+        cprint(f"{filepath}: No such file or directory", file=ctx.stderr)
         return
 
     # Check if it's a directory
     if vault.is_dir(vault_path):
-        print(f"{filepath} is a directory")
+        cprint(f"{filepath} is a directory", file=ctx.stderr)
         return
 
     try:
         # get contents
         contents = vault.read(vault_path).decode('utf-8')
     except Exception as e:
-        print(f"Error executing {filepath}: {str(e)}")
+        cprint(f"Error executing {filepath}: {str(e)}", file=ctx.stderr)
         return
 
     # Check for shebang (#!)
@@ -40,10 +41,10 @@ async def execute(ctx, filepath, *args):
                 # get content, replacing all $@ with the arguments
                 await run_script(rest)
             except Exception as e:
-                print(f"Error running ash script {filepath}: {str(e)}")
+                cprint(f"Error running ash script {filepath}: {str(e)}", file=ctx.stderr)
             return
         else:
-            print(f"{filepath}: unsupported interpreter: {shebang}")
+            cprint(f"{filepath}: unsupported interpreter: {shebang}", file=ctx.stderr)
             return
 
     # check for .DESCRIPTION/.IMPL (custom tool file)
@@ -60,26 +61,26 @@ async def execute(ctx, filepath, *args):
                 vault_path.split("/")[-1], parsed, args_str, quiet=True, capture=False
             )
             if result:
-                print(result)
+                cprint(result)
         except Exception as e:
-            print(f"Error running tool {filepath}: {str(e)}")
+            cprint(f"Error running tool {filepath}: {str(e)}", file=ctx.stderr)
         return
 
-    # check for .PROMPT directive
-    if not contents.startswith(".PROMPT\n"):
-        print(f"{filepath} is not executable")
+    # check for .PROMPT directive (may appear after .SYSTEM_PROMPT or other directives)
+    if "\n.PROMPT\n" not in contents and not contents.startswith(".PROMPT\n"):
+        cprint(f"{filepath} is not executable", file=ctx.stderr)
         return
 
     # parse the prompt program
     try:
         program = parse(contents)
     except Exception as e:
-        print(f"Error parsing {filepath}: {str(e)}")
+        cprint(f"Error parsing {filepath}: {str(e)}", file=ctx.stderr)
         return
 
     # run the program
     try:
         await run(program, filepath, *args)
     except Exception as e:
-        print(f"Error running {filepath}: {str(e)}")
+        cprint(f"Error running {filepath}: {str(e)}", file=ctx.stderr)
         return

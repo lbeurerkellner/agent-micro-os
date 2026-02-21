@@ -1,6 +1,5 @@
 import asyncio
 import io
-from contextlib import redirect_stdout
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.key_binding import KeyBindings
@@ -8,13 +7,16 @@ from prompt_toolkit.layout.containers import HSplit, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.layout import Layout
 
+from system.context import SystemContext, cprint
+
 
 async def capture_command_output(command_str: str) -> str:
     """Run a shell command and capture its stdout."""
     from bin.ash import run_command
 
     buf = io.StringIO()
-    with redirect_stdout(buf):
+    ctx = SystemContext.current()
+    with ctx.child(stdout=buf):
         await run_command(command_str)
     return buf.getvalue()
 
@@ -25,13 +27,13 @@ async def run(*args):
     Usage: watch -n SECONDS COMMAND [ARGS...]
     """
     if len(args) < 3 or args[0] != '-n':
-        print("Usage: watch -n SECONDS COMMAND [ARGS...]")
+        cprint("Usage: watch -n SECONDS COMMAND [ARGS...]")
         return
 
     try:
         interval = int(args[1])
     except ValueError:
-        print(f"watch: invalid interval: {args[1]}")
+        cprint(f"watch: invalid interval: {args[1]}")
         return
 
     command_str = ' '.join(args[2:])

@@ -117,41 +117,6 @@ class ModelProvider(FolderProvider):
     def has_model(self, provider: str, model: str) -> bool:
         return provider in self._providers and model in self._providers[provider]
     
-class ProcProvider(FolderProvider):
-    """Read-only provider that exposes /proc as a virtual folder of active agent processes.
-
-    Backed by a mutable dict reference from SystemContext._agents.
-    Each entry is a running agent keyed by its PID (UUID).
-    """
-
-    def __init__(self, agents: dict):
-        self._agents = agents
-
-    def list(self, prefix: str = "") -> list[str]:
-        if prefix:
-            return [k for k in self._agents if k.startswith(prefix)]
-        return list(self._agents.keys())
-
-    def read(self, path: str) -> bytes:
-        path = path.strip("/")
-        agent = self._agents.get(path)
-        if agent is None:
-            raise FileNotFoundError(f"No such process: '{path}'")
-        return f"<agent '{agent.program}' trajectory='{agent.trajectory}'> running".encode()
-
-    def exists(self, path: str) -> bool:
-        path = path.strip("/")
-        if not path:
-            return True
-        return path in self._agents
-
-    def is_dir(self, path: str) -> bool:
-        path = path.strip("/")
-        if not path:
-            return True
-        return False
-
-
 class ToolsFolderProvider(FolderProvider):
     """Read-only provider that exposes /tools/ as a folder with available tools.
 

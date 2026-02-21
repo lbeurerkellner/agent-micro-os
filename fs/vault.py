@@ -111,10 +111,15 @@ class Vault:
             # Add commit_id column if it doesn't exist
             cursor.execute("ALTER TABLE versions ADD COLUMN commit_id TEXT")
 
-        # Create index for faster lookups
+        # Drop legacy index that didn't include id
+        cursor.execute("DROP INDEX IF EXISTS idx_user_filepath")
+
+        # Create index for faster lookups — covers the common
+        # "get latest version" pattern (ORDER BY id DESC LIMIT 1)
+        # and MAX(id) subqueries used by list().
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_user_filepath
-            ON versions(user, filepath, timestamp DESC)
+            CREATE INDEX IF NOT EXISTS idx_user_filepath_id
+            ON versions(user, filepath, id DESC)
         """)
 
         # Create index for commit lookups
@@ -148,28 +153,27 @@ class Vault:
         if author is None:
             author = self.user
 
-        # Append mode outside a commit: update in-place if content is an extension
+        # Append mode outside a commit: append content to existing version in-place
         if mode == "a" and self._current_commit_id is None:
             conn = sqlite3.connect(self.filename)
             cursor = conn.cursor()
             cursor.execute(
                 """SELECT id, content, hash FROM versions
                    WHERE user = ? AND filepath = ?
-                   ORDER BY timestamp DESC, id DESC LIMIT 1""",
+                   ORDER BY id DESC LIMIT 1""",
                 (self.user, filepath)
             )
             row = cursor.fetchone()
             if row is not None and row[2] != 'tombstone':
-                existing_content = row[1]
-                if content.startswith(existing_content) and content != existing_content:
-                    content_hash = hashlib.sha256(content).hexdigest()
-                    cursor.execute(
-                        "UPDATE versions SET content = ?, hash = ?, timestamp = CURRENT_TIMESTAMP WHERE id = ?",
-                        (content, content_hash, row[0])
-                    )
-                    conn.commit()
-                    conn.close()
-                    return
+                merged = row[1] + content
+                content_hash = hashlib.sha256(merged).hexdigest()
+                cursor.execute(
+                    "UPDATE versions SET content = ?, hash = ?, timestamp = CURRENT_TIMESTAMP WHERE id = ?",
+                    (merged, content_hash, row[0])
+                )
+                conn.commit()
+                conn.close()
+                return
             conn.close()
 
         # If in a commit, batch the write
@@ -182,7 +186,7 @@ class Vault:
                 cursor.execute(
                     """SELECT hash FROM versions
                        WHERE user = ? AND filepath = ?
-                       ORDER BY timestamp DESC, id DESC LIMIT 1""",
+                       ORDER BY id DESC LIMIT 1""",
                     (self.user, filepath)
                 )
                 row = cursor.fetchone()
@@ -290,32 +294,16 @@ class Vault:
             prefix_clause = " AND filepath LIKE ?"
             params.append(prefix + "%")
 
-        if sort_by_recent:
-            params_inner = [self.user]
-            if prefix:
-                params_inner.append(prefix + "%")
-            cursor.execute(
-                f"""SELECT filepath
-                   FROM versions
-                   WHERE user = ? AND hash != 'tombstone'{prefix_clause} AND (filepath, id) IN (
-                       SELECT filepath, MAX(id)
-                       FROM versions
-                       WHERE user = ?{prefix_clause}
-                       GROUP BY filepath
-                   )
-                   ORDER BY timestamp DESC, id DESC""",
-                params + params_inner
-            )
-            files = [row[0].lstrip('/') for row in cursor.fetchall()]
-        else:
-            cursor.execute(
-                f"""SELECT DISTINCT filepath FROM versions v1
-                   WHERE user = ? AND hash != 'tombstone'{prefix_clause}
-                   AND id = (SELECT MAX(id) FROM versions v2
-                            WHERE v2.user = v1.user AND v2.filepath = v1.filepath)""",
-                params
-            )
-            files = [row[0].lstrip('/') for row in cursor.fetchall()]
+        order = "ORDER BY id DESC" if sort_by_recent else ""
+        cursor.execute(
+            f"""SELECT filepath FROM versions v1
+               WHERE user = ? AND hash != 'tombstone'{prefix_clause}
+               AND id = (SELECT MAX(id) FROM versions v2
+                        WHERE v2.user = v1.user AND v2.filepath = v1.filepath)
+               {order}""",
+            params
+        )
+        files = [row[0].lstrip('/') for row in cursor.fetchall()]
 
         conn.close()
 
@@ -357,7 +345,7 @@ class Vault:
             prefix_clause = " AND filepath LIKE ?"
             params.append(prefix + "%")
 
-        order = "ORDER BY timestamp DESC, id DESC" if sort_by_recent else ""
+        order = "ORDER BY id DESC" if sort_by_recent else ""
         cursor.execute(
             f"""SELECT filepath, timestamp, author, LENGTH(content)
                 FROM versions v1
@@ -440,7 +428,7 @@ class Vault:
         cursor.execute(
             """SELECT content, hash FROM versions
                WHERE user = ? AND filepath = ?
-               ORDER BY timestamp DESC, id DESC
+               ORDER BY id DESC
                LIMIT 1""",
             (self.user, filepath)
         )
@@ -469,7 +457,7 @@ class Vault:
         cursor.execute(
             """SELECT version_id, author, timestamp, hash FROM versions
                WHERE user = ? AND filepath = ?
-               ORDER BY timestamp ASC, id ASC""",
+               ORDER BY id ASC""",
             (self.user, filepath)
         )
 
@@ -630,7 +618,7 @@ class Vault:
                 cursor.execute(
                     """SELECT hash FROM versions
                        WHERE user = ? AND filepath = ?
-                       ORDER BY timestamp DESC, id DESC LIMIT 1""",
+                       ORDER BY id DESC LIMIT 1""",
                     (self.user, filepath)
                 )
                 row = cursor.fetchone()
@@ -697,7 +685,7 @@ class Vault:
             cursor.execute(
                 """SELECT hash FROM versions
                    WHERE user = ? AND filepath = ?
-                   ORDER BY timestamp DESC, id DESC LIMIT 1""",
+                   ORDER BY id DESC LIMIT 1""",
                 (self.user, filepath)
             )
             row = cursor.fetchone()
@@ -718,7 +706,7 @@ class Vault:
             cursor.execute(
                 """SELECT hash FROM versions
                    WHERE user = ? AND filepath = ?
-                   ORDER BY timestamp DESC, id DESC LIMIT 1""",
+                   ORDER BY id DESC LIMIT 1""",
                 (self.user, filepath)
             )
             row = cursor.fetchone()
@@ -843,7 +831,7 @@ class Vault:
         cursor.execute(
             """SELECT id, content, commit_id, hash FROM versions
                WHERE user = ? AND filepath = ?
-               ORDER BY timestamp ASC, id ASC""",
+               ORDER BY id ASC""",
             (self.user, filepath)
         )
         versions = cursor.fetchall()
@@ -1087,3 +1075,16 @@ class Vault:
                         break
 
         return ''.join(result_lines).encode('utf-8')
+
+    def vacuum(self) -> int:
+        """Vacuum the SQLite database to reclaim unused space.
+
+        :return: Bytes reclaimed (difference in file size before and after)
+        """
+        db_path = Path(self.filename)
+        size_before = db_path.stat().st_size
+        conn = sqlite3.connect(self.filename)
+        conn.execute("VACUUM")
+        conn.close()
+        size_after = db_path.stat().st_size
+        return size_before - size_after

@@ -1241,40 +1241,28 @@ def test_list_with_metadata_during_commit_excludes_pending_deletes(temp_db):
 
 
 def test_append_mode_updates_in_place(temp_db):
-    """Test that mode='a' updates the existing version when content is an extension."""
+    """Test that mode='a' appends content to existing version in-place."""
     vault = Vault(temp_db, "append_user")
 
     vault.write("log.txt", b"Line 1\n", mode="a")
     log1 = vault.log("log.txt")
     assert len(log1) == 1
 
-    # Append more content
-    vault.write("log.txt", b"Line 1\nLine 2\n", mode="a")
+    # Append more content (just the new chunk)
+    vault.write("log.txt", b"Line 2\n", mode="a")
 
     # Should still be one version (updated in place)
     log2 = vault.log("log.txt")
     assert len(log2) == 1, "Append should update in place, not create a new version"
 
-    # Content should be the extended version
+    # Content should be the concatenation
     assert vault.read("log.txt") == b"Line 1\nLine 2\n"
 
     # Append again
-    vault.write("log.txt", b"Line 1\nLine 2\nLine 3\n", mode="a")
+    vault.write("log.txt", b"Line 3\n", mode="a")
     log3 = vault.log("log.txt")
     assert len(log3) == 1, "Multiple appends should still be one version"
     assert vault.read("log.txt") == b"Line 1\nLine 2\nLine 3\n"
-
-
-def test_append_mode_new_version_when_not_extension(temp_db):
-    """Test that mode='a' creates a new version when content is not an extension."""
-    vault = Vault(temp_db, "append_noext_user")
-
-    vault.write("file.txt", b"Original content", mode="a")
-    vault.write("file.txt", b"Completely different", mode="a")
-
-    log = vault.log("file.txt")
-    assert len(log) == 2, "Non-extension write should create a new version"
-    assert vault.read("file.txt") == b"Completely different"
 
 
 def test_append_mode_new_file(temp_db):
@@ -1588,3 +1576,21 @@ def test_move_binary_data(temp_db):
 
     assert vault.read("moved.dat") == binary
     assert "bin.dat" not in vault.list()
+
+
+# ========== VACUUM TESTS ==========
+
+
+def test_vacuum(temp_db):
+    """Test that vacuum runs successfully and returns bytes reclaimed."""
+    vault = Vault(temp_db, "vacuum_user")
+
+    # Write and delete several files to create reclaimable space
+    for i in range(50):
+        vault.write(f"tmp/file{i}.txt", b"X" * 1000)
+    for i in range(50):
+        vault.delete(f"tmp/file{i}.txt")
+
+    reclaimed = vault.vacuum()
+    assert isinstance(reclaimed, int)
+    assert reclaimed >= 0

@@ -53,20 +53,20 @@ async def edit_with_prompt_toolkit(initial_text=""):
 
 async def run(*args):
     """Edit a file using a simple text editor."""
-    from system.context import SystemContext
+    from system.context import SystemContext, cprint
     from fs.utils import resolve_path
 
     ctx = SystemContext.current()
     if not ctx:
-        print("No context found. Please run this command within a SystemContext.")
+        cprint("No context found. Please run this command within a SystemContext.")
         return
 
     if len(args) == 0:
-        print("Usage: edit <file>")
+        cprint("Usage: edit <file>")
         return
 
     if len(args) > 1:
-        print("edit: only single file editing is supported")
+        cprint("edit: only single file editing is supported")
         return
 
     vault = ctx.fs()
@@ -77,7 +77,7 @@ async def run(*args):
     initial_content = ""
     if vault.exists(vault_path):
         if vault.is_dir(vault_path):
-            print(f"edit: {filepath}: Is a directory")
+            cprint(f"edit: {filepath}: Is a directory")
             return
 
         try:
@@ -85,18 +85,18 @@ async def run(*args):
             try:
                 initial_content = content_bytes.decode('utf-8')
             except UnicodeDecodeError:
-                print(f"edit: {filepath}: Cannot edit binary file")
+                cprint(f"edit: {filepath}: Cannot edit binary file")
                 return
         except Exception as e:
-            print(f"edit: {filepath}: Error reading file: {e}")
+            cprint(f"edit: {filepath}: Error reading file: {e}")
             return
 
     try:
         edited_content = await edit_with_prompt_toolkit(initial_content)
         if edited_content != initial_content:
             vault.write(vault_path, edited_content.encode('utf-8'))
-            print(f"Saved {filepath}")
+            cprint(f"Saved {filepath}")
         else:
-            print(f"No changes made to {filepath}")
+            cprint(f"No changes made to {filepath}")
     except Exception as e:
-        print(f"edit: {filepath}: Error: {e}")
+        cprint(f"edit: {filepath}: Error: {e}")

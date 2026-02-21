@@ -1,6 +1,5 @@
-from system.context import SystemContext
+from system.context import SystemContext, cprint
 import textwrap
-from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 import importlib
 import io
@@ -55,15 +54,16 @@ def _register_bin_tool(name, description, run_fn):
     """Register a bin/ command as a tool with signature cmd(args: list[str]) -> str."""
 
     async def _tool_wrapper(args: list[str] = []) -> str:
-        stdout = io.StringIO()
-        stderr = io.StringIO()
-        with redirect_stdout(stdout), redirect_stderr(stderr):
+        ctx = SystemContext.current()
+        stdout_buf = io.StringIO()
+        stderr_buf = io.StringIO()
+        with ctx.child(stdout=stdout_buf, stderr=stderr_buf):
             try:
                 result = await run_fn(*args)
             except Exception as e:
                 return f"Error: {e}"
-        output = stdout.getvalue()
-        err_output = stderr.getvalue()
+        output = stdout_buf.getvalue()
+        err_output = stderr_buf.getvalue()
         if err_output:
             output += err_output
         if result is not None:
@@ -107,12 +107,12 @@ class ToolProvider:
                         if tool := self._create_tool_wrapper(tool_name):
                             custom_tools[tool_name] = tool
                     except Exception as e:
-                        print(f"Warning: Failed to load tool {tool_name}: {e}")
+                        cprint(f"Warning: Failed to load tool {tool_name}: {e}", file=self.ctx.stderr)
             except Exception:
                 # Vault doesn't exist or can't be listed, return empty dict
                 return {}
         except Exception as e:
-            print(f"Warning: Failed to load custom tools: {e}")
+            cprint(f"Warning: Failed to load custom tools: {e}", file=self.ctx.stderr)
 
         # cache the loaded tools
         self.custom_tools_cache = custom_tools
@@ -257,23 +257,20 @@ async def ash(command: str) -> str:
     """Executes an 'ash' shell command in the current context. See ls /sbin and ls /bin for available commands. Note that this is only a very restricted shell environment. You always should prefer using dedicated tools, and otherwise check /sbin and /bin before running a command with this."""
     from bin.ash import run_command
 
-    # Capture stdout and stderr
-    stdout = io.StringIO()
-    stderr = io.StringIO()
-
     ctx = SystemContext.current()
+    stdout_buf = io.StringIO()
+    stderr_buf = io.StringIO()
 
-    with redirect_stdout(stdout), redirect_stderr(stderr):
-        with ctx.child(interactive=False) as ctx:
-            try:
-                result = await run_command(command)
-            except Exception as e:
-                return f"Error executing command: {e}\n{stderr.getvalue()}"
+    with ctx.child(interactive=False, stdout=stdout_buf, stderr=stderr_buf):
+        try:
+            result = await run_command(command)
+        except Exception as e:
+            return f"Error executing command: {e}\n{stderr_buf.getvalue()}"
 
-    output = stdout.getvalue()
+    output = stdout_buf.getvalue()
     if result is not None:
         output += f"\nCommand result: {result}"
-    error_output = stderr.getvalue()
+    error_output = stderr_buf.getvalue()
     if error_output:
         output += f"\nError output: {error_output}"
     return output.strip()

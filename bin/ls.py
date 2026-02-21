@@ -113,11 +113,11 @@ Options:
 
 async def run(*args):
     """List files and directories."""
-    from system.context import SystemContext
+    from system.context import SystemContext, cprint
 
     ctx = SystemContext.current()
     if not ctx:
-        print("No context found. Please run this command within a SystemContext.")
+        cprint("No context found. Please run this command within a SystemContext.")
         return
 
     # Parse flags
@@ -125,19 +125,19 @@ async def run(*args):
     positional = []
     for arg in args:
         if arg == '-h':
-            print(_USAGE)
+            cprint(_USAGE)
             return
         elif arg == '-t':
             show_timestamps = True
         elif arg.startswith('-'):
-            print(f"ls: unknown option: {arg}")
-            print(_USAGE)
+            cprint(f"ls: unknown option: {arg}")
+            cprint(_USAGE)
             return
         else:
             positional.append(arg)
 
     if len(positional) > 1:
-        print(_USAGE)
+        cprint(_USAGE)
         return
 
     vault = ctx.fs()
@@ -149,12 +149,12 @@ async def run(*args):
             return
         for name, ts in entries:
             if ts:
-                print(f"{ts}  {name}")
+                cprint(f"{ts}  {name}")
             else:
-                print(f"{'':>19}  {name}")
+                cprint(f"{'':>19}  {name}")
     else:
         entries = _list_directory(vault, target)
         if not entries:
             return
         for entry in entries:
-            print(entry)
+            cprint(entry)

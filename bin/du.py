@@ -133,13 +133,13 @@ async def run(*args):
       CURRENT_SIZE: Size of the latest version of files
       TOTAL_SIZE: Size including all historical versions
     """
-    from system.context import SystemContext
+    from system.context import SystemContext, cprint
     from fs.utils import resolve_path
     import fnmatch
 
     ctx = SystemContext.current()
     if not ctx:
-        print("No context found. Please run this command within a SystemContext.")
+        cprint("No context found. Please run this command within a SystemContext.")
         return
 
     # Parse flags
@@ -153,8 +153,8 @@ async def run(*args):
         elif arg == '-h':
             human_readable = True
         elif arg.startswith('-'):
-            print(f"du: unknown option: {arg}")
-            print("Usage: du [-s] [-h] [PATH...]")
+            cprint(f"du: unknown option: {arg}")
+            cprint("Usage: du [-s] [-h] [PATH...]")
             return
         else:
             positional.append(arg)
@@ -219,7 +219,7 @@ async def run(*args):
                     targets.append((match, display))
 
                 if not matched:
-                    print(f"du: {pattern}: No such file or directory")
+                    cprint(f"du: {pattern}: No such file or directory")
             else:
                 # Regular path (no glob)
                 _, vault_path = resolve_path(pattern, ctx.cwd)
@@ -255,7 +255,7 @@ async def run(*args):
             total_size = row[0] if row and row[0] else 0
             conn.close()
 
-            print(f"{_format_size(current_size, human_readable)}\t{_format_size(total_size, human_readable)}\t{display_name}")
+            cprint(f"{_format_size(current_size, human_readable)}\t{_format_size(total_size, human_readable)}\t{display_name}")
             continue
 
         # Calculate directory sizes (current and total)
@@ -263,7 +263,7 @@ async def run(*args):
 
         if not current_sizes and not total_sizes:
             # No files found
-            print(f"{_format_size(0, human_readable)}\t{_format_size(0, human_readable)}\t{display_name}")
+            cprint(f"{_format_size(0, human_readable)}\t{_format_size(0, human_readable)}\t{display_name}")
             continue
 
         if summarize or len(targets) > 1:
@@ -272,7 +272,7 @@ async def run(*args):
             target_key = target if target else '.'
             current = current_sizes.get(target_key, 0)
             total = total_sizes.get(target_key, 0)
-            print(f"{_format_size(current, human_readable)}\t{_format_size(total, human_readable)}\t{display_name}")
+            cprint(f"{_format_size(current, human_readable)}\t{_format_size(total, human_readable)}\t{display_name}")
         else:
             # Show all subdirectories, sorted by path
             all_dirs = set(current_sizes.keys()) | set(total_sizes.keys())
@@ -295,4 +295,4 @@ async def run(*args):
                 else:
                     display = f"./{dir_path}" if dir_path != '.' else '.'
 
-                print(f"{_format_size(current, human_readable)}\t{_format_size(total, human_readable)}\t{display}")
+                cprint(f"{_format_size(current, human_readable)}\t{_format_size(total, human_readable)}\t{display}")

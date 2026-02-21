@@ -17,21 +17,21 @@ Example:
 
 async def run(*args):
     """Write content to a file."""
-    from system.context import SystemContext
+    from system.context import SystemContext, cprint
     from fs.utils import resolve_path
 
     ctx = SystemContext.current()
     if not ctx:
-        print("No context found. Please run this command within a SystemContext.")
+        cprint("No context found. Please run this command within a SystemContext.")
         return
 
     if not args or args[0] == '-h':
-        print(_USAGE)
+        cprint(_USAGE)
         return
 
     if len(args) < 2:
-        print("write: missing operand")
-        print("Try 'write -h' for more information.")
+        cprint("write: missing operand")
+        cprint("Try 'write -h' for more information.")
         return
 
     filepath = args[0]
@@ -47,6 +47,6 @@ async def run(*args):
 
     try:
         ctx.fs().write(vault_path, content.encode('utf-8'))
-        print(f"Wrote to {filepath}")
+        cprint(f"Wrote to {filepath}")
     except Exception as e:
-        print(f"write: {filepath}: {e}")
+        cprint(f"write: {filepath}: {e}")
