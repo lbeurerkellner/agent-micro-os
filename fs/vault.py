@@ -139,7 +139,8 @@ class Vault:
         :param filepath: The path of the file to write (leading/trailing slashes are stripped)
         :param content: The content of the file as bytes
         :param author: The author of this version (defaults to the vault's user)
-        :param mode: If "a", update existing version in-place when content is an extension
+        :param mode: If "a", append content to the existing version in-place (no new version).
+                     If "replace", overwrite the existing version in-place (no new version).
         :raises ValueError: If filepath is empty
         """
         # Normalize filepath: strip leading/trailing slashes
@@ -153,8 +154,8 @@ class Vault:
         if author is None:
             author = self.user
 
-        # Append mode outside a commit: append content to existing version in-place
-        if mode == "a" and self._current_commit_id is None:
+        # In-place modes (no new version row): "a" appends, "replace" overwrites
+        if mode in ("a", "replace") and self._current_commit_id is None:
             conn = sqlite3.connect(self.filename)
             cursor = conn.cursor()
             cursor.execute(
@@ -165,11 +166,11 @@ class Vault:
             )
             row = cursor.fetchone()
             if row is not None and row[2] != 'tombstone':
-                merged = row[1] + content
-                content_hash = hashlib.sha256(merged).hexdigest()
+                new_content = row[1] + content if mode == "a" else content
+                content_hash = hashlib.sha256(new_content).hexdigest()
                 cursor.execute(
                     "UPDATE versions SET content = ?, hash = ?, timestamp = CURRENT_TIMESTAMP WHERE id = ?",
-                    (merged, content_hash, row[0])
+                    (new_content, content_hash, row[0])
                 )
                 conn.commit()
                 conn.close()

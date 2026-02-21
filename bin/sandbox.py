@@ -4,15 +4,18 @@ from system.context import cprint
 async def run(*args, env: dict = None, readonly=False, quiet=False, capture=False):
     """Launch a Docker container with vault contents mounted as a volume.
 
-    Usage: sandbox [--image IMAGE] [--prefix PATH] [--cmd CMD] [path]
+    Usage: sandbox [--image IMAGE] [--build DOCKERFILE] [--prefix PATH] [--no-version GLOB] [--cmd CMD] [path]
 
     Exports the current vault snapshot into a Docker volume, launches a
     container, and on exit diffs the volume back into the vault as a commit.
 
     Options:
-        --image IMAGE   Docker image to use (default: ubuntu:24.04)
-        --prefix PATH   Only mount files under this vault path
-        --cmd CMD       Run a command instead of interactive bash
+        --image IMAGE       Docker image to use (default: ubuntu:24.04)
+        --build DOCKERFILE  Build the image from DOCKERFILE if not already present
+        --prefix PATH       Only mount files under this vault path
+        --no-version GLOB   Glob pattern for paths to write back in-place (mode="a",
+                            no new commit entry); may be repeated
+        --cmd CMD           Run a command instead of interactive bash
 
     Args:
         *args: Command-line arguments as described above.
@@ -34,17 +37,29 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
 
     # Parse args
     image = "ubuntu:24.04"
+    build_dockerfile = None
     prefix = ""
     cmd = None
     mount = "/workspace"
     uid = 0
+    no_version_globs = []
+    ignore_globs = []
     i = 0
     while i < len(args):
         if args[i] == "--image" and i + 1 < len(args):
             image = args[i + 1]
             i += 2
+        elif args[i] == "--build" and i + 1 < len(args):
+            build_dockerfile = args[i + 1]
+            i += 2
         elif args[i] == "--prefix" and i + 1 < len(args):
             prefix = args[i + 1]
+            i += 2
+        elif args[i] == "--no-version" and i + 1 < len(args):
+            no_version_globs.append(args[i + 1])
+            i += 2
+        elif args[i] == "--ignore" and i + 1 < len(args):
+            ignore_globs.append(args[i + 1])
             i += 2
         elif args[i] == "--cmd" and i + 1 < len(args):
             cmd = ' '.join(args[i + 1:])
@@ -61,6 +76,10 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
         else:
             cprint(f"sandbox: unknown option '{args[i]}'")
             return
+
+    # Build image if requested and not yet present
+    if build_dockerfile:
+        _ensure_image(image, build_dockerfile, quiet=quiet)
 
     vault = Vault(ctx.fsimage, ctx.user)
 
@@ -81,6 +100,16 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
         temp.put_archive("/data", tar_buf)
         temp.remove()
 
+        # Fix ownership of the volume root itself (put_archive doesn't chown
+        # the pre-existing /data directory, only its contents)
+        if uid != 0:
+            client.containers.run(
+                "alpine",
+                command=["chown", f"{uid}:{uid}", "/data"],
+                volumes={vol_name: {"bind": "/data", "mode": "rw"}},
+                remove=True,
+            )
+
         # prepare env arguments
         env_args = []
         for k, v in (env or {}).items():
@@ -89,7 +118,9 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
         # Launch container
         if not quiet:
             cprint(f"Launching {image}...")
-        docker_args = ["docker", "run", "--rm", "-it",
+        tty_flags = [] if capture else ["-it"]
+        docker_args = ["docker", "run", "--rm",
+                        *tty_flags,
                         "-v", f"{vol_name}:{mount}", "-w", mount,
                         *env_args,
                         image]
@@ -118,7 +149,9 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
                 return f"{output}\n[exit code: {exit_code}]"
             else:
                 return exit_code == 0
-        _diff_and_commit(vault, snapshot, current, prefix, quiet=quiet)
+        _diff_and_commit(vault, snapshot, current, prefix, quiet=quiet,
+                         no_version_globs=no_version_globs,
+                         ignore_globs=ignore_globs)
 
         if capture:
             return f"{output}\n[exit code: {exit_code}]"
@@ -204,10 +237,47 @@ def _read_volume(client, vol_name):
         temp.remove()
 
 
-def _diff_and_commit(vault, snapshot, current, prefix, quiet=False):
+def _glob_match(fp, globs):
+    """Return True if *fp* matches any glob pattern in *globs*.
+
+    Supports ``**`` as a recursive wildcard (matches across ``/``),
+    ``*`` as a single-segment wildcard, and ``?`` for a single character.
+    """
+    import re
+
+    def _to_re(pattern):
+        parts = pattern.split("**")
+        return ".*".join(
+            re.escape(p).replace(r"\*", "[^/]*").replace(r"\?", "[^/]")
+            for p in parts
+        ) + "$"
+
+    return any(re.match(_to_re(g), fp) for g in globs)
+
+
+def _diff_and_commit(vault, snapshot, current, prefix, quiet=False,
+                     no_version_globs=(), ignore_globs=()):
     added = set(current) - set(snapshot)
     removed = set(snapshot) - set(current)
     modified = {k for k in current if k in snapshot and current[k] != snapshot[k]}
+
+    vault_prefix = (prefix.strip("/") + "/") if prefix else ""
+
+    # --no-version: write in-place (no new version row), checked before --ignore
+    # so explicitly kept files are never silently dropped.
+    if no_version_globs:
+        for fp in (added | modified):
+            if _glob_match(fp, no_version_globs):
+                vault.write(vault_prefix + fp, current[fp], mode="replace")
+        added = {fp for fp in added if not _glob_match(fp, no_version_globs)}
+        removed = {fp for fp in removed if not _glob_match(fp, no_version_globs)}
+        modified = {fp for fp in modified if not _glob_match(fp, no_version_globs)}
+
+    # --ignore: drop everything else that matches (not written to vault at all)
+    if ignore_globs:
+        added = {fp for fp in added if not _glob_match(fp, ignore_globs)}
+        removed = {fp for fp in removed if not _glob_match(fp, ignore_globs)}
+        modified = {fp for fp in modified if not _glob_match(fp, ignore_globs)}
 
     if not added and not removed and not modified:
         if not quiet:
@@ -217,14 +287,42 @@ def _diff_and_commit(vault, snapshot, current, prefix, quiet=False):
     if not quiet:
         cprint(f"{len(added)} added, {len(modified)} modified, {len(removed)} removed")
 
-    vault_prefix = (prefix.strip("/") + "/") if prefix else ""
-
     vault.begin_commit()
     for fp in added | modified:
         vault.write(vault_prefix + fp, current[fp])
     for fp in removed:
         vault.delete(vault_prefix + fp)
     vault.end_commit(f"sandbox: +{len(added)} ~{len(modified)} -{len(removed)}")
-    
+
     if not quiet:
         cprint("Committed.")
+
+
+def _ensure_image(image, dockerfile, quiet=False):
+    """Build *image* from *dockerfile* if it is not already present in Docker."""
+    import subprocess
+    from pathlib import Path
+
+    import docker
+
+    client = docker.from_env()
+    try:
+        client.images.get(image)
+        return  # already present
+    except docker.errors.ImageNotFound:
+        pass
+
+    dockerfile = Path(dockerfile)
+    if not dockerfile.exists():
+        raise FileNotFoundError(f"sandbox: Dockerfile not found: {dockerfile}")
+
+    if not quiet:
+        cprint(f"Building image {image} from {dockerfile} ...")
+
+    subprocess.run(
+        ["docker", "build", "-t", image, "-f", str(dockerfile), str(dockerfile.parent)],
+        check=True,
+    )
+
+    if not quiet:
+        cprint(f"Image {image} built.")

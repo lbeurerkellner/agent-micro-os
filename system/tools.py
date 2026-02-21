@@ -2,6 +2,7 @@ from system.context import SystemContext, cprint
 import textwrap
 from pathlib import Path
 import importlib
+import inspect
 import io
 import shlex
 
@@ -57,9 +58,17 @@ def _register_bin_tool(name, description, run_fn):
         ctx = SystemContext.current()
         stdout_buf = io.StringIO()
         stderr_buf = io.StringIO()
+
+        # check whether run_fn has tool_use_mode parameter, if so, specify it to True
+        signature = inspect.signature(run_fn)
+        if "tool_use_mode" in signature.parameters:
+            kwargs = {"tool_use_mode": True}
+        else:
+            kwargs = {}
+
         with ctx.child(stdout=stdout_buf, stderr=stderr_buf):
             try:
-                result = await run_fn(*args)
+                result = await run_fn(*args, **kwargs)
             except Exception as e:
                 return f"Error: {e}"
         output = stdout_buf.getvalue()
