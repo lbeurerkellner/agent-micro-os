@@ -1,7 +1,14 @@
 from system.context import cprint
 
 
-async def run(*args, env: dict = None, readonly=False, quiet=False, capture=False):
+_TOOL_SHEBANG_SETUP = (
+    "printf '#!/bin/sh\\nif [ ! -f \"$1\" ]; then shift; fi\\nexec python3 \"$@\"\\n'"
+    " > /bin/tool && chmod +x /bin/tool"
+)
+
+
+async def run(*args, env: dict = None, readonly=False, quiet=False, capture=False,
+              agents_md_name="AGENTS.md", tool_shebang=True):
     """Launch a Docker container with vault contents mounted as a volume.
 
     Usage: sandbox [--image IMAGE] [--build DOCKERFILE] [--prefix PATH] [--no-version GLOB] [--cmd CMD] [path]
@@ -85,6 +92,10 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
 
     # Export
     tar_buf, snapshot = _export_to_tar(vault, prefix, uid=uid, gid=uid)
+
+    # Inject dynamically generated etc/AGENTS.md into the export
+    _inject_agents_md(tar_buf, snapshot, ctx.fs(), uid=uid, gid=uid, filename=agents_md_name)
+
     if not quiet:
         cprint(f"Exported {len(snapshot)} files")
 
@@ -124,10 +135,16 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
                         "-v", f"{vol_name}:{mount}", "-w", mount,
                         *env_args,
                         image]
+        # Build setup preamble: workspace bin on PATH + optional /bin/tool
+        setup_parts = [f"export PATH={mount}/bin:$PATH"]
+        if tool_shebang:
+            setup_parts.append(_TOOL_SHEBANG_SETUP)
+        setup = " && ".join(setup_parts)
+
         if cmd:
-            docker_args.extend(["sh", "-c", cmd])
+            docker_args.extend(["sh", "-c", f"{setup} && {cmd}"])
         else:
-            docker_args.append("bash")
+            docker_args.extend(["sh", "-c", f"{setup} && exec bash"])
 
         # Execute the container
         if not capture:
@@ -198,7 +215,8 @@ def _export_to_tar(vault, prefix, uid=0, gid=0):
             rel = filepath[len(pfx):] if pfx else filepath
             info = tarfile.TarInfo(name=rel)
             info.size = len(content)
-            info.mode = 0o600
+            is_tool = content.startswith(b"#!/bin/tool") or content.startswith(b"#!/sbin/tool")
+            info.mode = 0o755 if is_tool else 0o600
             info.uid = uid
             info.gid = gid
             tar.addfile(info, io.BytesIO(content))
@@ -206,6 +224,30 @@ def _export_to_tar(vault, prefix, uid=0, gid=0):
 
     buf.seek(0)
     return buf, snapshot
+
+
+def _inject_agents_md(tar_buf, snapshot, fs, uid=0, gid=0, filename="AGENTS.md"):
+    """Append a dynamically generated AGENTS.md to an existing tar buffer."""
+    import io
+    import tarfile
+
+    from system.tools import generate_agents_md
+
+    content = generate_agents_md(fs).encode("utf-8")
+    rel_path = filename
+
+    # Reopen the tar in append mode
+    tar_buf.seek(0)
+    with tarfile.open(fileobj=tar_buf, mode="a") as tar:
+        info = tarfile.TarInfo(name=rel_path)
+        info.size = len(content)
+        info.mode = 0o600
+        info.uid = uid
+        info.gid = gid
+        tar.addfile(info, io.BytesIO(content))
+
+    snapshot[rel_path] = content
+    tar_buf.seek(0)
 
 
 def _read_volume(client, vol_name):
@@ -286,6 +328,13 @@ def _diff_and_commit(vault, snapshot, current, prefix, quiet=False,
 
     if not quiet:
         cprint(f"{len(added)} added, {len(modified)} modified, {len(removed)} removed")
+        # List added/modified/removed files
+        for fp in sorted(added):
+            cprint(f"  + {fp}")
+        for fp in sorted(modified):
+            cprint(f"  ~ {fp}")
+        for fp in sorted(removed):
+            cprint(f"  - {fp}")
 
     vault.begin_commit()
     for fp in added | modified:

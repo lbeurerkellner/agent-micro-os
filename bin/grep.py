@@ -46,6 +46,8 @@ class GrepOptions:
 # ---------------------------------------------------------------------------
 
 _USAGE = """\
+grep - Search for patterns in files
+
 Usage: grep [OPTIONS] PATTERN [FILE ...]
        grep [OPTIONS] -e PATTERN [-e PATTERN ...] [FILE ...]
 
@@ -258,8 +260,6 @@ def _grep_files(
     max_count: int = 0,
 ) -> list[tuple[str, int, str]]:
     """Search *files* for *pattern_str* and return matches.
-
-    This is the primary helper used by ``system/tools.py``.
 
     Returns a list of ``(filepath, line_number, line_text)`` tuples.
     Line numbers are 1-based.

@@ -1,7 +1,4 @@
 # TODO
-
-* new runtime: claude code
-
 # Later
 
 * new runtime: pi

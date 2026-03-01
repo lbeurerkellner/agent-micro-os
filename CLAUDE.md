@@ -10,12 +10,11 @@ The [vault](fs/vault.py) is a versioned SQLite-backed file system that tracks al
 ### Overlay FS
 The [overlay filesystem](fs/overlay.py) combines the vault (read-write) with read-only [folder providers](fs/providers.py). It mounts virtual directories:
 - `/sbin` - Built-in commands via `BinProvider`
-- `/tools` - Agent-callable tools via `ToolsProvider`
 - `/models` - Available LLM models via `ModelProvider`
 - `/proc` - Running agent processes via `ProcProvider`
 
 ### Tools
-[Tools](system/tools.py) are Python functions decorated with `@tool` that agents can call. Examples: `read()`, `write()`, `list_directory()`, `grep()`, `sleep()`. Tools access the vault through the [SystemContext](system/context.py).
+Agents interact with the system exclusively through the `ash` tool, which is the sole native LLM tool. All commands (built-in and user-defined) are invoked as CLIs via `ash`. The [tools module](system/tools.py) registers `ash` and builds a dynamic docstring listing available commands.
 
 ### Models
 The [ModelProvider](fs/providers.py#L54-L112) exposes available LLM models as virtual files under `/models/<provider>/<model>`. Currently supports OpenAI models (via `OPENAI_API_KEY` env var) and an echo model for testing.

@@ -43,26 +43,14 @@ async def execute(ctx, filepath, *args):
             except Exception as e:
                 cprint(f"Error running ash script {filepath}: {str(e)}", file=ctx.stderr)
             return
-        else:
-            cprint(f"{filepath}: unsupported interpreter: {shebang}", file=ctx.stderr)
+
+        # Check if it's a tool script (#!/bin/tool <description>)
+        interpreter = shebang.split()[0] if shebang else ""
+        if interpreter in ['/bin/tool', '/sbin/tool', 'tool']:
+            await _run_tool_script(ctx, filepath, rest, *args)
             return
 
-    # check for .DESCRIPTION/.IMPL (custom tool file)
-    if ".DESCRIPTION" in contents and ".IMPL" in contents:
-        from system.tools import ToolProvider
-        from system.context import SystemContext
-
-        provider = ToolProvider(SystemContext.current())
-        parsed = provider._parse_tool_file(contents)
-
-        try:
-            result = await provider._execute_custom_tool(
-                vault_path.split("/")[-1], parsed, args, quiet=True, capture=False
-            )
-            if result:
-                cprint(result)
-        except Exception as e:
-            cprint(f"Error running tool {filepath}: {str(e)}", file=ctx.stderr)
+        cprint(f"{filepath}: unsupported interpreter: {shebang}", file=ctx.stderr)
         return
 
     # check for .PROMPT directive (may appear after .SYSTEM_PROMPT or other directives)
@@ -83,3 +71,33 @@ async def execute(ctx, filepath, *args):
     except Exception as e:
         cprint(f"Error running {filepath}: {str(e)}", file=ctx.stderr)
         return
+
+
+async def _run_tool_script(ctx, filepath, script_body, *args):
+    """Run a #!/bin/tool script in a sandboxed Python environment."""
+    import uuid
+    import shlex
+
+    fs = ctx.fs()
+    temp_id = str(uuid.uuid4())
+    temp_file = f"tmp/tool_{temp_id}.py"
+    fs.write(temp_file, script_body.strip().encode("utf-8"))
+
+    try:
+        from bin.sandbox import run as sandbox_run
+        cmd = f"python /workspace/{temp_file}"
+        if args:
+            cmd += " " + " ".join(shlex.quote(a) for a in args)
+        result = await sandbox_run(
+            "--image", "python:3.12", "--cmd", cmd,
+            readonly=False, quiet=True, capture=True,
+        )
+        if result:
+            cprint(result)
+    except Exception as e:
+        cprint(f"Error running tool {filepath}: {str(e)}", file=ctx.stderr)
+    finally:
+        try:
+            fs.delete(temp_file)
+        except Exception:
+            pass

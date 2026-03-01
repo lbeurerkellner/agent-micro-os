@@ -6,7 +6,7 @@ import uuid
 from dataclasses import dataclass
 from fs.providers import ModelProvider
 from system.context import SystemContext, cprint
-from system.tools import ToolProvider
+from system.tools import make_ash_tool, generate_agents_md
 from termcolor import colored
 
 from agents import Runner, Agent, RawResponsesStreamEvent, RunItemStreamEvent, function_tool, ModelSettings
@@ -17,7 +17,7 @@ class Program:
     # paths to tools available
     tools: list[callable]
 
-    # tool paths as declared in the program (e.g. /tools/read)
+    # tool paths (always ["/tools/ash"])
     tool_paths: list[str]
 
     # whether this is an interactive program that keeps prompting after a turn completes
@@ -41,23 +41,16 @@ def parse(contents: str):
     <optional system prompt, if not present the default system prompt will be used>]
     .PROMPT
     <system prompt>
-    [.TOOLS
-    /tools/tool1
-    /tools/tool2]
     ```
     [...] is optional.
     """
     lines = contents.splitlines()
     system_prompt = None
-    tools: list[callable] = []
-    tool_paths: list[str] = []
     prompt_lines = []
     section = None
     is_interactive = False
-    
-    max_turns = safe_int(SystemContext.current().read("/etc/model/max_turns", "10"), default=10)
 
-    tool_provider = ToolProvider(SystemContext.current())
+    max_turns = safe_int(SystemContext.current().read("/etc/model/max_turns", "10"), default=10)
 
     assert ".PROMPT" in lines, "Program must contain a .PROMPT section"
 
@@ -69,48 +62,34 @@ def parse(contents: str):
             section = "prompt"
             continue
         elif line == ".TOOLS":
+            # .TOOLS section is no longer used; silently skip
             section = "tools"
             continue
-        elif line == ".INTERACTIVE": # indicates that this is an interactive program that keeps prompting after a turn completes
+        elif line == ".INTERACTIVE":
             is_interactive = True
             continue
         elif line.startswith(".INCLUDE"):
-            # support including other program files, e.g. .INCLUDE /programs/helper.txt
             include_path = line[len(".INCLUDE"):].strip()
             try:
                 include_contents = SystemContext.current().fs().read(include_path).decode()
-                line = include_contents.strip()  # replace the include line with the contents of the included file
+                line = include_contents.strip()
             except Exception as e:
                 raise ValueError(f"Failed to include file '{include_path}' in program: {str(e)}")
         elif line.startswith(".MAX_TURNS"):
             max_turns = safe_int(line[len(".MAX_TURNS"):].strip(), default=10)
             continue
-        
+
         if section == "system_prompt":
             system_prompt = (system_prompt or "") + line + "\n"
         elif section == "prompt":
             prompt_lines.append(line)
-        elif section == "tools":
-            tool_name = line.strip()
-            assert tool_name.startswith("/tools/"), f"Tool paths must start with /tools/, but got '{tool_name}'"
-            # strp prefix
-            tool_name = tool_name[len("/tools/"):]
-            # support '*' wildcard to include all tools from the provider
-            if tool_name == "*":
-                for tool_name in tool_provider.list():
-                    tools.append(tool_provider[tool_name])
-                    tool_paths.append(f"/tools/{tool_name}")
+        # .TOOLS lines are silently ignored
 
-            # resolve tools via tool_provider
-            if tool_name in tool_provider:
-                tools.append(tool_provider[tool_name])
-                tool_paths.append(f"/tools/{tool_name}")
-            else:
-                raise ValueError(f"Executable links tool '{tool_name}' which does not exist in /tools/")
+    # All programs get the ash tool as the sole native tool,
+    # with a dynamic docstring that includes vault user-defined commands
+    tools = [make_ash_tool(SystemContext.current().fs())]
+    tool_paths = ["/tools/ash"]
 
-    # deduplicate tools
-    tools = list(dict.fromkeys(tools))
-    
     prompt = "\n".join(prompt_lines).strip()
     return Program(tools=tools, tool_paths=tool_paths, system_prompt=system_prompt, prompt=prompt, max_turns=max_turns or 10, is_interactive=is_interactive)
 
@@ -130,7 +109,8 @@ async def run(program: Program, filepath: str, *args):
     reasoning_effort = context.read("/etc/model/reasoning_effort", "low")
     
     # get system prompt, if not provided use default
-    system_prompt = program.system_prompt or context.read("/etc/AGENTS.md", "You are a helpful assistant.")
+    system_prompt = program.system_prompt or context.read("/AGENTS.md", "You are a helpful assistant.")
+    system_prompt += "\n\n" + generate_agents_md(context.fs())
     
     # parse model configuration
     try:

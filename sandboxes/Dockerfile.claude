@@ -51,6 +51,13 @@ RUN ARCH=$(dpkg --print-architecture) && \
   sudo dpkg -i "git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" && \
   rm "git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb"
 
+# Install /bin/tool interpreter so #!/bin/tool shebangs work natively
+RUN printf '#!/bin/sh\nif [ ! -f "$1" ]; then shift; fi\nexec python3 "$@"\n' > /bin/tool \
+  && chmod +x /bin/tool
+
+# Put workspace bin on PATH so vault commands are available by name
+ENV PATH=/workspace/bin:$PATH
+
 # Set up non-root user
 USER node
 

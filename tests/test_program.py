@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch, AsyncMock
 
 from system.context import SystemContext
-from fs.providers import BinProvider, ToolsFolderProvider
+from fs.providers import BinProvider
 from bin.ash import run_command
 
 
@@ -55,7 +55,7 @@ async def test_program_text_output(temp_db):
     """A .PROMPT program should produce text output from the LLM."""
     with SystemContext(user="test", fsimage=temp_db, interactive=False) as ctx:
         ctx.mount("sbin", BinProvider())
-        ctx.mount("tools", ToolsFolderProvider(ctx))
+
         vault = ctx.fs()
 
         # set up model config — provider and model just need to pass has_provider/has_model
@@ -80,7 +80,7 @@ async def test_program_with_redirect(temp_db):
     """Running a program with > should capture LLM output into a file."""
     with SystemContext(user="test", fsimage=temp_db, interactive=False) as ctx:
         ctx.mount("sbin", BinProvider())
-        ctx.mount("tools", ToolsFolderProvider(ctx))
+
         vault = ctx.fs()
 
         vault.write("etc/model/default", b"echo echo")
@@ -106,7 +106,7 @@ async def test_program_writes_trace(temp_db):
     """Running a program should create a trajectory trace file."""
     with SystemContext(user="test", fsimage=temp_db, interactive=False) as ctx:
         ctx.mount("sbin", BinProvider())
-        ctx.mount("tools", ToolsFolderProvider(ctx))
+
         vault = ctx.fs()
 
         vault.write("etc/model/default", b"echo echo")
@@ -135,7 +135,7 @@ async def test_program_with_system_prompt(temp_db):
     """A .PROMPT program with .SYSTEM_PROMPT should pass it to the agent."""
     with SystemContext(user="test", fsimage=temp_db, interactive=False) as ctx:
         ctx.mount("sbin", BinProvider())
-        ctx.mount("tools", ToolsFolderProvider(ctx))
+
         vault = ctx.fs()
 
         vault.write("etc/model/default", b"echo echo")
@@ -162,7 +162,7 @@ async def test_program_chain_with_builtin(temp_db):
     """A program can be chained with && and builtins."""
     with SystemContext(user="test", fsimage=temp_db, interactive=False) as ctx:
         ctx.mount("sbin", BinProvider())
-        ctx.mount("tools", ToolsFolderProvider(ctx))
+
         vault = ctx.fs()
 
         vault.write("etc/model/default", b"echo echo")

@@ -186,41 +186,39 @@ Do something helpful."""
 
 
 # ---------------------------------------------------------------------------
-# Bin tool wrappers — list[str] args
+# ash tool — the sole native tool
 # ---------------------------------------------------------------------------
 
 
-async def test_bin_tool_accepts_list_args(temp_db):
-    """Registered bin tools should accept a list of string args."""
-    from system.tools import TOOLS, _discover_bin_tools
-
-    # Ensure tools are discovered
-    _discover_bin_tools()
+async def test_ash_tool_runs_cat(temp_db):
+    """The ash tool should be able to run bin commands like cat."""
+    from system.tools import TOOLS
 
     with SystemContext(user="bob", fsimage=temp_db) as ctx:
+        from fs.providers import BinProvider
+        ctx.mount("sbin", BinProvider())
         vault = ctx.fs()
         vault.write("hello.txt", b"hello world\n")
         ctx.cwd = "/"
 
-        # cat is a bin tool; call it with list args
-        cat_tool = TOOLS.get("cat")
-        assert cat_tool is not None, "cat tool should be registered"
+        ash_tool = TOOLS.get("ash")
+        assert ash_tool is not None, "ash tool should be registered"
 
-        result = await cat_tool(args=["hello.txt"])
+        result = await ash_tool(command="cat hello.txt")
         assert "hello world" in result
 
 
-async def test_bin_tool_accepts_empty_list(temp_db):
-    """Bin tools should work with empty list args (defaults)."""
-    from system.tools import TOOLS, _discover_bin_tools
-
-    _discover_bin_tools()
+async def test_ash_tool_runs_ls(temp_db):
+    """The ash tool should be able to run ls."""
+    from system.tools import TOOLS
 
     with SystemContext(user="bob", fsimage=temp_db) as ctx:
+        from fs.providers import BinProvider
+        ctx.mount("sbin", BinProvider())
         ctx.cwd = "/"
-        ls_tool = TOOLS.get("ls")
-        assert ls_tool is not None, "ls tool should be registered"
 
-        # Should not raise even with empty args
-        result = await ls_tool(args=[])
+        ash_tool = TOOLS.get("ash")
+        assert ash_tool is not None, "ash tool should be registered"
+
+        result = await ash_tool(command="ls")
         assert isinstance(result, str)

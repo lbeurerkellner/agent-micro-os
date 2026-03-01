@@ -4,12 +4,12 @@ from pathlib import Path
 
 from system.context import cprint
 
-_IMAGE = "agent-micro-os-claude"
+_IMAGE = "claude-sandbox:latest"
 _DOCKERFILE = Path(__file__).parent.parent / "sandboxes" / "Dockerfile.claude"
 _NODE_UID = 1000
 
 _USAGE = """\
-claude - Run the Claude Code coding agent in a containerized environment with access to this workspace as /workspace.
+claude - Run the Claude Code agent in a sandboxed environment
 
 When this command completes, the changes will be commmitted back to this workspace automatically. When the agent creates e.g. a file at /workspace/path/to/file.txt, it will be saved back to the vault at /path/to/file.txt.
 
@@ -19,7 +19,7 @@ Usage: claude PROMPT
 """
 
 
-async def run(*args, env: dict = None, readonly=False, quiet=False, capture=False, tool_use_mode=False):
+async def run(*args, env: dict = None, readonly=False, quiet=False, tool_use_mode=False):
     """Run the claude CLI in a Docker container.
 
     Usage: claude [--prefix PATH] [claude-args...]
@@ -46,7 +46,7 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
         return
 
     # Parse optional --prefix; everything else goes to claude
-    prefix = ctx.cwd.strip("/")
+    prefix = ""
     claude_args = []
     i = 0
     arg_list = list(args)
@@ -86,5 +86,7 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
         env=merged_env,
         readonly=readonly,
         quiet=quiet,
-        capture=capture,
+        capture=tool_use_mode,  # Capture output for tool use mode
+        agents_md_name="CLAUDE.md",
+        tool_shebang=False # claude image has it built-in
     )

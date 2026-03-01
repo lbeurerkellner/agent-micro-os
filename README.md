@@ -13,8 +13,7 @@ You can then investigate the file system:
 (/) > ls .
 etc/     # - configuration files, AGENTS.md
 models/  # - available models mounted as /models/<provider>/<model>; set OPENAI_API_KEY before launching to have gpt-5-mini mounted
-sbin/    # - built-in system command, implemented in bin/ (ls, cat, etc.)
-tools/   # - tools available to agents, implemented in system/tools.py
+sbin/    # - built-in system commands, implemented in bin/ (ls, cat, etc.)
 ```
 
 To create your first agent (program), run the following command:
@@ -28,9 +27,6 @@ Paste the following content into the editor:
 ```
 .PROMPT
 Greet the user in a silly way
-.TOOLS
-/tools/ls
-/tools/cat
 ```
 
 Save with Ctlr-S. You can then run your program with the following command:
@@ -55,10 +51,8 @@ Below your /agent/BRAIN.md file:
 The included BRAIN content is provided as a system instruction and context. It is not part of the user's message and must not be presented as such to the user.
 .MAX_TURNS 100
 .INTERACTIVE
-.TOOLS
-/tools/*
 ```
 
-This creates an agent with a `/agent/BRAIN.md` file for memory and access to all available tools on the system. If you need more tools, you can just ask the agent to create them.
+This creates an agent with a `/agent/BRAIN.md` file for memory. All commands are accessible via the `ash` tool. If you need more commands, you can create them with `create_tool`.
 
 A possible 

@@ -4,7 +4,7 @@ import asyncio
 import io
 import re
 from dataclasses import dataclass
-from fs.providers import ModelProvider, ToolsFolderProvider
+from fs.providers import ModelProvider
 from system.context import SystemContext
 from datetime import datetime
 
@@ -138,7 +138,6 @@ async def crond_loop(users: list[str], fsimage: str):
                 
                 SystemContext.current().mount("sbin", BinProvider())
                 SystemContext.current().mount("models", ModelProvider())
-                SystemContext.current().mount("tools", ToolsFolderProvider(ctx))
 
                 vault = ctx.fs()
                 jobs = collect_jobs(vault)

@@ -367,12 +367,11 @@ async def loop(user: str, fsimage: str, command: str = None, debug: bool = False
     """
     with SystemContext(user=user, fsimage=fsimage, debug=debug, interactive=True, cost_limit=cost_limit) as ctx:
         # Mount built-in commands as /sbin
-        from fs.providers import BinProvider, ModelProvider, ToolsFolderProvider
+        from fs.providers import BinProvider, ModelProvider
 
         # Mount standard folders
         SystemContext.current().mount("sbin", BinProvider())
         SystemContext.current().mount("models", ModelProvider())
-        SystemContext.current().mount("tools", ToolsFolderProvider(ctx))
 
         # Start cron daemon as a background task
         if crond:

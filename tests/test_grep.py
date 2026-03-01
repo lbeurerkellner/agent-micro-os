@@ -637,7 +637,7 @@ async def test_grep_combined_flags(temp_db):
 
 
 # ---------------------------------------------------------------------------
-# _grep_files helper (for system/tools.py)
+# _grep_files helper
 # ---------------------------------------------------------------------------
 
 async def test_grep_helper_returns_results(temp_db):

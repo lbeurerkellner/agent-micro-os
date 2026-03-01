@@ -1,10 +1,10 @@
 from system.context import SystemContext, cprint
-import textwrap
-from pathlib import Path
 import importlib
-import inspect
+import textwrap
 import io
-import shlex
+import functools
+from pathlib import Path
+
 
 # static built-in tools
 TOOLS = {}
@@ -12,229 +12,74 @@ TOOLS = {}
 # bin/ directory (project root / bin)
 _BIN_DIR = Path(__file__).resolve().parent.parent / "bin"
 
-# Commands to skip when auto-discovering bin/ tools
-# (interactive, internal, or already exposed differently)
-_SKIP_COMMANDS = {"__init__", "ash", "edit", "vim"}
+# Base docstring for ash (without commands list)
+_ASH_BASE_DOC = """\
+Executes a shell command. This is the only way to interact with the system. Use <command> -h for detailed usage of any command.
+
+Available commands:
+"""
 
 
-def _discover_bin_tools():
-    """Scan bin/*.py for modules with _USAGE and register them as tools."""
+@functools.cache
+def _builtin_commands_summary() -> list[str]:
+    """Scan bin/*.py and return one-liner descriptions (cached, runs once)."""
+    lines = []
     for pyfile in sorted(_BIN_DIR.glob("*.py")):
         name = pyfile.stem
-        if name in _SKIP_COMMANDS:
+        if name in ("__init__", "ash"):
             continue
-
-        # Try to import and check for _USAGE
-        module_name = f"bin.{name}"
         try:
-            mod = importlib.import_module(module_name)
+            mod = importlib.import_module(f"bin.{name}")
         except Exception:
             continue
-
         usage = getattr(mod, "_USAGE", None)
-        if not usage:
-            continue
-
-        run_fn = getattr(mod, "run", None)
-        if not run_fn:
-            continue
-
-        # Extract description from first line: "name - Description"
-        first_line = usage.strip().splitlines()[0]
-        remainder = usage.strip()[len(first_line):].strip()
-        if " - " in first_line:
-            description = first_line.split(" - ", 1)[1]
+        if usage:
+            lines.append(usage.strip().splitlines()[0])
         else:
-            description = first_line
-
-        # Create the tool wrapper
-        _register_bin_tool(name, description.strip() + "\n\n" + remainder, run_fn)
+            lines.append(name)
+    return lines
 
 
-def _register_bin_tool(name, description, run_fn):
-    """Register a bin/ command as a tool with signature cmd(args: list[str]) -> str."""
-
-    async def _tool_wrapper(args: list[str] = []) -> str:
-        ctx = SystemContext.current()
-        stdout_buf = io.StringIO()
-        stderr_buf = io.StringIO()
-
-        # check whether run_fn has tool_use_mode parameter, if so, specify it to True
-        signature = inspect.signature(run_fn)
-        if "tool_use_mode" in signature.parameters:
-            kwargs = {"tool_use_mode": True}
-        else:
-            kwargs = {}
-
-        with ctx.child(stdout=stdout_buf, stderr=stderr_buf):
-            try:
-                result = await run_fn(*args, **kwargs)
-            except Exception as e:
-                return f"Error: {e}"
-        output = stdout_buf.getvalue()
-        err_output = stderr_buf.getvalue()
-        if err_output:
-            output += err_output
-        if result is not None:
-            output += str(result)
-        return output.strip()
-
-    _tool_wrapper.__name__ = name
-    _tool_wrapper.__qualname__ = name
-    _tool_wrapper.__doc__ = description
-    TOOLS[name] = _tool_wrapper
-
-
-class ToolProvider:
-    """Provides access to both built-in tools and custom .tool files from /bin/"""
-
-    def __init__(self, ctx: SystemContext):
-        self.ctx = ctx
-        self.custom_tools_cache = None  # Cache for custom tools to avoid repeated vault access
-
-    def _load_custom_tools(self):
-        """Load .tool files from /bin/ directory (real-time, not cached)"""
-        if self.custom_tools_cache is not None:
-            return self.custom_tools_cache
-
-        custom_tools = {}
+def _vault_commands_summary(fs) -> list[str]:
+    """List user-defined commands from vault bin/ directory."""
+    builtin_names = {p.stem for p in _BIN_DIR.glob("*.py")} - {"__init__", "ash"}
+    lines = []
+    try:
+        vault_bins = fs.list(prefix="bin")
+    except Exception:
+        return []
+    for filepath in sorted(vault_bins):
+        if not filepath.startswith("bin/"):
+            continue
+        name = filepath[4:]  # strip "bin/"
+        if not name or "/" in name or name in builtin_names:
+            continue
+        # Try to extract description from #!/bin/tool shebang
         try:
-            from fs.vault import Vault
+            content = fs.read(filepath).decode("utf-8")
+            first_line = content.splitlines()[0] if content else ""
+            if first_line.startswith("#!") and "tool" in first_line.split()[0]:
+                # #!/bin/tool <description>
+                desc = first_line.split(None, 1)[1] if " " in first_line else ""
+                if desc:
+                    lines.append(f"{name} - {desc}")
+                else:
+                    lines.append(name)
+            else:
+                lines.append(name)
+        except Exception:
+            lines.append(name)
+    return lines
 
-            # Access vault directly to avoid circular dependencies with overlay providers
-            vault = Vault(self.ctx.fsimage, self.ctx.user)
 
-            # List all files in vault and filter for .tool files in bin/
-            try:
-                all_files = vault.list(prefix="bin")
-                bin_tools = [f for f in all_files if f.startswith("bin/")]
+def build_ash_docstring(fs=None) -> str:
+    """Build the full ash docstring with built-in and optionally vault commands."""
+    lines = list(_builtin_commands_summary())
+    if fs:
+        lines.extend(_vault_commands_summary(fs))
+    lines.sort(key=lambda l: l.split(" - ")[0] if " - " in l else l)
+    return _ASH_BASE_DOC + "\n".join(lines)
 
-                for filepath in bin_tools:
-                    # Extract tool name from bin/name
-                    tool_name = filepath[4:]
-                    try:
-                        if tool := self._create_tool_wrapper(tool_name):
-                            custom_tools[tool_name] = tool
-                    except Exception as e:
-                        cprint(f"Warning: Failed to load tool {tool_name}: {e}", file=self.ctx.stderr)
-            except Exception:
-                # Vault doesn't exist or can't be listed, return empty dict
-                return {}
-        except Exception as e:
-            cprint(f"Warning: Failed to load custom tools: {e}", file=self.ctx.stderr)
-
-        # cache the loaded tools
-        self.custom_tools_cache = custom_tools
-
-        return custom_tools
-
-    def _parse_tool_file(self, content):
-        """Parse a .tool file structure"""
-        lines = content.splitlines()
-        description = []
-        implementation = []
-        section = None
-
-        for line in lines:
-            stripped = line.strip()
-            if stripped == ".DESCRIPTION":
-                section = "description"
-                continue
-            elif stripped == ".IMPL":
-                section = "implementation"
-                continue
-
-            if section == "description":
-                description.append(line)
-            elif section == "implementation":
-                implementation.append(line)
-
-        return {
-            'description': '\n'.join(description).strip(),
-            'implementation': '\n'.join(implementation).strip()
-        }
-
-    def _create_tool_wrapper(self, tool_name):
-        """Create a callable wrapper for a custom .tool file"""
-        fs = self.ctx.fs()
-
-        # Read and parse the .tool file
-        content = fs.read(f"bin/{tool_name}").decode('utf-8')
-        if ".DESCRIPTION" not in content:
-            return None
-        parsed = self._parse_tool_file(content)
-
-        # Create the wrapper function dynamically using exec
-        func_code = f'''async def {tool_name}(args: list[str] = []) -> str:
-    """{parsed['description']}\n\nImplementation in /bin/{tool_name}"""
-    return await _execute_tool({repr(tool_name)}, {repr(parsed)}, args)
-'''
-
-        namespace = {'_execute_tool': self._execute_custom_tool}
-        exec(func_code, namespace)
-        func = namespace[tool_name]
-
-        return func
-
-    async def _execute_custom_tool(self, tool_name, parsed, args, quiet=True, capture=True):
-        """Execute a custom tool by running its implementation in a sandbox"""
-        import uuid
-        from bin.sandbox import run as sandbox_run
-
-        fs = self.ctx.fs()
-
-        # Write implementation to a temporary file
-        temp_id = str(uuid.uuid4())
-        temp_file = f"tmp/tool_{temp_id}.py"
-        fs.write(temp_file, parsed['implementation'].encode('utf-8'))
-
-        try:
-            # Build the command, passing args as-is
-            cmd = f"python /workspace/{temp_file}"
-            if args:
-                cmd += " " + " ".join(shlex.quote(a) for a in args)
-
-            # execute via sandbox with --cmd
-            return await sandbox_run("--image", "python:3.12", "--cmd", cmd, readonly=False, quiet=quiet, capture=capture)
-        finally:
-            # Clean up temp file
-            try:
-                fs.delete(temp_file)
-            except Exception:
-                pass
-
-    def __contains__(self, key):
-        """Check if a tool exists (built-in or custom)"""
-        if key in TOOLS:
-            return True
-        custom_tools = self._load_custom_tools()
-        return key in custom_tools
-
-    def list(self):
-        """List all available tools (built-in and custom)"""
-        custom_tools = self._load_custom_tools()
-        return list(TOOLS.keys()) + list(custom_tools.keys())
-
-    def __getitem__(self, key):
-        """Get a tool by name"""
-        if key in TOOLS:
-            return TOOLS[key]
-        custom_tools = self._load_custom_tools()
-        if key in custom_tools:
-            return custom_tools[key]
-        raise KeyError(f"Tool '{key}' not found")
-
-    def get(self, key, default=None):
-        """Get a tool with optional default"""
-        try:
-            return self[key]
-        except KeyError:
-            return default
-
-    def keys(self):
-        """Return all available tool names"""
-        custom_tools = self._load_custom_tools()
-        return list(TOOLS.keys()) + list(custom_tools.keys())
 
 def tool(func):
     """Decorator to register a built-in tool"""
@@ -263,7 +108,7 @@ def tool_signature(func):
 
 @tool
 async def ash(command: str) -> str:
-    """Executes an 'ash' shell command in the current context. See ls /sbin and ls /bin for available commands. Note that this is only a very restricted shell environment. You always should prefer using dedicated tools, and otherwise check /sbin and /bin before running a command with this."""
+    """Executes a shell command. This is the only way to interact with the system. Use <command> -h for detailed usage of any command."""
     from bin.ash import run_command
 
     ctx = SystemContext.current()
@@ -284,59 +129,25 @@ async def ash(command: str) -> str:
         output += f"\nError output: {error_output}"
     return output.strip()
 
-@tool
-def create_tool(name: str, description: str, implementation: str) -> str:
-    """
-    Creates a new tool executable in the form of a CLI executable in /bin/<name>.
 
-    The tool executable will be created at /bin/<name> in the vault and contains:
-
-    .DESCRIPTION
-    <description text>
-
-    .IMPL
-    <python implementation>
-
-    Parameters:
-    - name: The tool name (creates /bin/<name>)
-    - description: Text describing what the tool does so others know how to use it exactly (for .DESCRIPTION section)
-    - implementation: Python script for the .IMPL section
-
-    The tool receives a single `args: str` argument. The implementation can parse arguments from sys.argv as needed.
-
-    The Python implementation will be executed in a sandboxed environment where
-    /workspace is the current working directory, containing a copy of the / (root)
-    of the current environment. The tool can read/write files relative to /workspace.
-
-    Once created, the tool will be exposed as /bin/<executable> but also show up as a system-mounted tool in the virtual filesystem at /tool/<name>.
-
-    You should use the 'ash' tool to test the created tool directly via 'ash <toolname> <args>' after creation. It may be helpful to debug the tool with some simple inputs, before you finalize.
-
-    Example:
-    create_tool(
-        name="wordcount",
-        description="Counts words in a file",
-        implementation="import sys\\nwith open(f'/workspace/{sys.argv[1]}') as f:\\n    print(len(f.read().split()))"
-    )
-    """
-    ctx = SystemContext.current()
-    fs = ctx.fs()
-
-    # Construct the filepath
-    filepath = f"bin/{name}"
-
-    # Check if file already exists
-    if fs.exists(filepath):
-        return f"Error: Tool /bin/{name} already exists"
-
-    # Build the tool file content
-    content = f".DESCRIPTION\n{description}\n\n.IMPL\n{implementation}\n"
-
-    # Write the file
-    fs.write(filepath, content.encode('utf-8'))
-
-    return f"Created tool at /bin/{name}"
+_AGENTS_TEMPLATE = (Path(__file__).resolve().parent.parent / "templates" / "AGENTS.md").read_text()
 
 
-# Auto-discover bin/ commands at import time
-_discover_bin_tools()
+def generate_agents_md(fs) -> str:
+    """Generate the dynamic AGENTS.md content from template + custom tools."""
+    vault_cmds = _vault_commands_summary(fs)
+    if vault_cmds:
+        custom_tools = "## Custom Tools\n\n" + "\n".join(f"- {line}" for line in vault_cmds) + "\n"
+    else:
+        custom_tools = ""
+    return _AGENTS_TEMPLATE.replace("{{CUSTOM_TOOLS}}", custom_tools).strip()
+
+
+def make_ash_tool(fs=None):
+    """Return a copy of the ash tool with a dynamic docstring that includes
+    both built-in and vault user-defined commands."""
+    @functools.wraps(ash)
+    async def _ash(command: str) -> str:
+        return await ash(command)
+    _ash.__doc__ = build_ash_docstring(fs)
+    return _ash
