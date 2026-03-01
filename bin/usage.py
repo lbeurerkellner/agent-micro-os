@@ -131,34 +131,25 @@ def aggregate(trajectories: list[dict]) -> dict:
 
 
 def collect_usage(vault, span: timedelta) -> dict:
-    """Collect and aggregate usage from trajectory files in a vault.
+    """Collect and aggregate usage from all agent sessions in a vault.
 
     :param vault: A Vault or OverlayFS instance
     :param span: Time window to look back from now
     :return: Aggregated stats dict from aggregate()
     """
-    now = datetime.now()
-    cutoff = now - span
-    metas = vault.list_with_metadata()
+    from system.sessions import collect_all_sessions
+
+    cutoff = datetime.now() - span
+    sessions = collect_all_sessions(vault, cutoff_ts=cutoff)
 
     trajectories = []
-    for meta in metas:
-        if not meta.filepath.startswith("var/trajectories/"):
-            continue
-        # Filter by timestamp
-        if meta.timestamp:
-            try:
-                ts = datetime.fromisoformat(meta.timestamp)
-                if ts < cutoff:
-                    continue
-            except ValueError:
-                pass  # can't parse timestamp, include it
-        # Read and parse
-        try:
-            content = vault.read(meta.filepath).decode("utf-8", errors="replace")
-            trajectories.append(parse_trajectory(content))
-        except (FileNotFoundError, UnicodeDecodeError):
-            continue
+    for s in sessions:
+        trajectories.append({
+            "model": s.model,
+            "input_tokens": s.input_tokens,
+            "output_tokens": s.output_tokens,
+            "status": s.status,
+        })
 
     return aggregate(trajectories)
 

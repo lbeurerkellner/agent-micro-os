@@ -29,7 +29,6 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
         env: Optional dict of environment variables to pass to the container.
         readonly: If True, do not commit changes back to the vault.
     """
-    import subprocess
     import uuid
 
     import docker
@@ -86,7 +85,7 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
 
     # Build image if requested and not yet present
     if build_dockerfile:
-        _ensure_image(image, build_dockerfile, quiet=quiet)
+        await _ensure_image(image, build_dockerfile, quiet=quiet)
 
     vault = Vault(ctx.fsimage, ctx.user)
 
@@ -147,13 +146,19 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
             docker_args.extend(["sh", "-c", f"{setup} && exec bash"])
 
         # Execute the container
+        import asyncio
         if not capture:
-            result = subprocess.run(docker_args)
-            exit_code = result.returncode
+            proc = await asyncio.create_subprocess_exec(*docker_args)
+            exit_code = await proc.wait()
         else:
-            result = subprocess.run(docker_args, capture_output=True, text=True)
-            exit_code = result.returncode
-            output = result.stdout + result.stderr
+            proc = await asyncio.create_subprocess_exec(
+                *docker_args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            exit_code = proc.returncode
+            output = stdout.decode() + stderr.decode()
             if not quiet:
                 cprint(output)
 
@@ -233,7 +238,7 @@ def _inject_agents_md(tar_buf, snapshot, fs, uid=0, gid=0, filename="AGENTS.md")
 
     from system.tools import generate_agents_md
 
-    content = generate_agents_md(fs).encode("utf-8")
+    content = generate_agents_md(fs, sandbox_note=True).encode("utf-8")
     rel_path = filename
 
     # Reopen the tar in append mode
@@ -347,9 +352,9 @@ def _diff_and_commit(vault, snapshot, current, prefix, quiet=False,
         cprint("Committed.")
 
 
-def _ensure_image(image, dockerfile, quiet=False):
+async def _ensure_image(image, dockerfile, quiet=False):
     """Build *image* from *dockerfile* if it is not already present in Docker."""
-    import subprocess
+    import asyncio
     from pathlib import Path
 
     import docker
@@ -368,10 +373,11 @@ def _ensure_image(image, dockerfile, quiet=False):
     if not quiet:
         cprint(f"Building image {image} from {dockerfile} ...")
 
-    subprocess.run(
-        ["docker", "build", "-t", image, "-f", str(dockerfile), str(dockerfile.parent)],
-        check=True,
+    proc = await asyncio.create_subprocess_exec(
+        "docker", "build", "-t", image, "-f", str(dockerfile), str(dockerfile.parent),
     )
+    if await proc.wait() != 0:
+        raise RuntimeError(f"sandbox: failed to build image {image}")
 
     if not quiet:
         cprint(f"Image {image} built.")

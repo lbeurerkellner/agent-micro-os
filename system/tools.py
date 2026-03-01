@@ -133,14 +133,26 @@ async def ash(command: str) -> str:
 _AGENTS_TEMPLATE = (Path(__file__).resolve().parent.parent / "templates" / "AGENTS.md").read_text()
 
 
-def generate_agents_md(fs) -> str:
+_SANDBOX_NOTE = (
+    "\nThe working directory `/workspace` is a snapshot of the vault. The surrounding system at / is a standard Linux environment with access to typical tools (bash, python, etc.)."
+    "When your session ends, any changes you made under `/workspace` are automatically diffed and committed back. Absolute paths listed below refer to the host environment; in your sandbox they are relative to `/workspace` (e.g. `/workspace/etc/crontab`, not `/etc/crontab`).\n\n"
+    "You have full access to standard Linux tools (bash, python, etc.). Use them freely.\n"
+    "Note that Agent Programs are not executable in your environment, but you can create or edit them for use by the host.\n"
+    "Tool programs can be executed freely, but can also be edited and created for use by the host or this or future sandbox sessions.\n"
+    "Any changes made to the system outside of /workspace (e.g. installing packages, modifying /etc) will persist for the duration of your session but will not be saved back to the vault or visible in future sessions."
+)
+
+
+def generate_agents_md(fs, sandbox_note=False) -> str:
     """Generate the dynamic AGENTS.md content from template + custom tools."""
     vault_cmds = _vault_commands_summary(fs)
     if vault_cmds:
         custom_tools = "## Custom Tools\n\n" + "\n".join(f"- {line}" for line in vault_cmds) + "\n"
     else:
         custom_tools = ""
-    return _AGENTS_TEMPLATE.replace("{{CUSTOM_TOOLS}}", custom_tools).strip()
+    md = _AGENTS_TEMPLATE.replace("{{CUSTOM_TOOLS}}", custom_tools)
+    md = md.replace("{{SANDBOX_NOTE}}", _SANDBOX_NOTE if sandbox_note else "")
+    return md.strip()
 
 
 def make_ash_tool(fs=None):

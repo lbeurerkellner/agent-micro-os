@@ -76,9 +76,12 @@ def _format_age(timestamp: str | None) -> str:
     if not timestamp:
         return "-"
     try:
-        from datetime import datetime
-        ts = datetime.fromisoformat(timestamp)
-        secs = int((datetime.now() - ts).total_seconds())
+        from datetime import datetime, timezone
+        # Handle 'Z' suffix (Python 3.11 fromisoformat doesn't support it)
+        ts_str = timestamp.replace("Z", "+00:00")
+        ts = datetime.fromisoformat(ts_str)
+        now = datetime.now(timezone.utc) if ts.tzinfo else datetime.now()
+        secs = int((now - ts).total_seconds())
         if secs < 10:
             return "Just now"
         elif secs < 60:
@@ -152,58 +155,32 @@ def collect_processes(vault) -> list[dict]:
 
 
 def collect_idle_agents(vault, active_pids: set, active_sessions: set | None = None) -> list[dict]:
-    """Collect recently completed agent trajectories not currently running."""
+    """Collect recently completed agent sessions not currently running."""
     from datetime import datetime, timedelta
+    from system.sessions import collect_all_sessions
+
+    cutoff = datetime.now() - timedelta(hours=24)
+    sessions = collect_all_sessions(vault, cutoff_ts=cutoff)
 
     idle = []
-    cutoff = datetime.now() - timedelta(hours=24)
-
-    try:
-        metas = vault.list_with_metadata()
-    except Exception:
-        return idle
-
-    traj_metas = []
-    for meta in metas:
-        if not meta.filepath.startswith("var/trajectories/"):
-            continue
-        call_id = meta.filepath[len("var/trajectories/"):]
-        if call_id in active_pids:
-            continue
-        if meta.timestamp:
-            try:
-                ts = datetime.fromisoformat(meta.timestamp)
-                if ts < cutoff:
-                    continue
-            except ValueError:
-                pass
-        traj_metas.append(meta)
-
-    # Most recent first
-    traj_metas.sort(key=lambda m: m.timestamp or "", reverse=True)
-
     seen_sessions: set[str] = set(active_sessions or [])
-    for meta in traj_metas:
-        call_id = meta.filepath[len("var/trajectories/"):]
-        try:
-            content = vault.read(meta.filepath).decode("utf-8", errors="replace")
-        except (FileNotFoundError, UnicodeDecodeError):
+    for s in sessions:
+        if s.session_id in active_pids:
             continue
-        stats = parse_trajectory_live(content)
-        session_id = stats.get("session_id") or "-"
-        if session_id != "-" and session_id in seen_sessions:
+        if s.session_id != "-" and s.session_id in seen_sessions:
             continue
-        seen_sessions.add(session_id)
+        seen_sessions.add(s.session_id)
         idle.append({
-            "pid": call_id,
-            "program": stats.get("program") or "-",
-            "session_id": session_id,
-            "model": stats.get("model") or "-",
-            "turns": stats.get("turns", 0),
-            "tool_calls": stats.get("tool_calls", 0),
-            "input_tokens": stats.get("input_tokens", 0),
-            "output_tokens": stats.get("output_tokens", 0),
-            "last_active": meta.timestamp,
+            "pid": s.session_id,
+            "program": s.program,
+            "session_id": s.session_id,
+            "model": s.model or "-",
+            "turns": s.turns,
+            "tool_calls": s.tool_calls,
+            "input_tokens": s.input_tokens,
+            "output_tokens": s.output_tokens,
+            "last_active": s.timestamp,
+            "source": s.source,
         })
 
     return idle
@@ -259,50 +236,86 @@ def format_usage_header(stats: dict, cost_limit: float | None = None) -> list[tu
     return ft
 
 
+# (header, key, min_width, weight, align)
+# weight>0 columns expand to fill available space; weight=0 are fixed.
 _COLS = [
-    ("STATUS", "status", 8, "left"),
-    # ("PID", "pid", 10, "left"),
-    ("SESSION", "session_id", 10, "left"),
-    ("PROGRAM", "program", 15, "left"),
-    ("MODEL", "model", 20, "left"),
-    ("TURNS", "turns", 7, "right"),
-    ("TOOLS", "tool_calls", 7, "right"),
-    ("IN TOK", "input_tokens", 10, "right"),
-    ("OUT TOK", "output_tokens", 10, "right"),
-    ("LAST ACTIVE", "last_active", 16, "right"),
+    ("STATUS",      "status",        6, 0, "left"),
+    ("SESSION",     "session_id",   10, 0, "left"),
+    ("PROGRAM",     "program",      10, 1, "left"),
+    ("MODEL",       "model",        12, 2, "left"),
+    ("TURNS",       "turns",         5, 0, "right"),
+    ("TOOLS",       "tool_calls",    5, 0, "right"),
+    ("IN TOK",      "input_tokens", 10, 0, "right"),
+    ("OUT TOK",     "output_tokens", 10, 0, "right"),
+    ("LAST ACTIVE", "last_active",  11, 0, "right"),
 ]
 
+_COL_GAP = 2
 
-def _build_header() -> str:
+
+def _compute_col_widths(term_width: int | None = None) -> list[int]:
+    """Compute column widths, expanding flexible columns to fill terminal width."""
+    if term_width is None:
+        try:
+            import shutil
+            term_width = shutil.get_terminal_size((120, 24)).columns
+        except Exception:
+            term_width = 120
+
+    fixed_total = sum(mw for _, _, mw, w, _ in _COLS if w == 0)
+    flex_cols = [(i, mw, w) for i, (_, _, mw, w, _) in enumerate(_COLS) if w > 0]
+    total_gap = _COL_GAP * (len(_COLS) - 1)
+    flex_min = sum(mw for _, mw, _ in flex_cols)
+
+    available = term_width - fixed_total - total_gap
+    total_weight = sum(w for _, _, w in flex_cols)
+
+    widths = [mw for _, _, mw, _, _ in _COLS]
+
+    if available > flex_min and total_weight > 0:
+        for idx, mw, w in flex_cols:
+            widths[idx] = max(mw, available * w // total_weight)
+    return widths
+
+
+def _truncate(val: str, width: int) -> str:
+    """Truncate a string to width, adding ellipsis if needed."""
+    if len(val) <= width:
+        return val
+    if width <= 1:
+        return val[:width]
+    return val[:width - 1] + "…"
+
+
+def _build_header(widths: list[int]) -> str:
     parts = []
-    for name, _, width, align in _COLS:
-        parts.append(name.rjust(width) if align == "right" else name.ljust(width))
-    return "  ".join(parts)
+    for (name, _, _, _, align), w in zip(_COLS, widths):
+        cell = _truncate(name, w)
+        parts.append(cell.rjust(w) if align == "right" else cell.ljust(w))
+    return (" " * _COL_GAP).join(parts)
 
 
-def _format_row(proc: dict) -> str:
+def _format_row(proc: dict, widths: list[int]) -> str:
     parts = []
-    for _, key, width, align in _COLS:
+    for (_, key, _, _, align), w in zip(_COLS, widths):
         val = proc.get(key, "-")
-        if key == "pid":
-            val = str(val)[:8]
-        elif key == "session_id":
-            val = str(val)[:10]
-        elif key in ("input_tokens", "output_tokens"):
+        if key in ("input_tokens", "output_tokens"):
             val = f"{val:,}"
         elif key == "last_active":
             val = _format_age(val if val != "-" else None)
         else:
             val = str(val)
-        parts.append(val.rjust(width) if align == "right" else val.ljust(width))
-    return "  ".join(parts)
+        val = _truncate(val, w)
+        parts.append(val.rjust(w) if align == "right" else val.ljust(w))
+    return (" " * _COL_GAP).join(parts)
 
 
-def format_combined_table(running: list[dict], idle: list[dict], cursor: int) -> tuple[list[tuple[str, str]], int, int]:
+def format_combined_table(running: list[dict], idle: list[dict], cursor: int, term_width: int | None = None) -> tuple[list[tuple[str, str]], int, int]:
     """Format running and idle agents in one table with cursor highlighting.
 
     Returns (formatted_text, total_agents, cursor_line_within_table).
     """
+    widths = _compute_col_widths(term_width)
     ft: list[tuple[str, str]] = []
 
     for proc in running:
@@ -310,7 +323,7 @@ def format_combined_table(running: list[dict], idle: list[dict], cursor: int) ->
     for proc in idle:
         proc["status"] = "IDLE"
 
-    header = _build_header()
+    header = _build_header(widths)
     sep = " " * len(header)
 
     ft.append(("bold", header + "\n"))
@@ -325,7 +338,7 @@ def format_combined_table(running: list[dict], idle: list[dict], cursor: int) ->
         line += 1
         for i, proc in enumerate(running):
             style = "reverse" if i == cursor else ""
-            ft.append((style, _format_row(proc) + "\n"))
+            ft.append((style, _format_row(proc, widths) + "\n"))
             if i == cursor:
                 cursor_line = line
             line += 1
@@ -337,7 +350,7 @@ def format_combined_table(running: list[dict], idle: list[dict], cursor: int) ->
         for i, proc in enumerate(idle):
             abs_i = n_run + i
             style = "reverse" if abs_i == cursor else ""
-            ft.append((style, _format_row(proc) + "\n"))
+            ft.append((style, _format_row(proc, widths) + "\n"))
             if abs_i == cursor:
                 cursor_line = line
             line += 1
@@ -409,7 +422,11 @@ async def run(*args):
 
         cursor = state["cursor"]
         usage_ft = format_usage_header(stats, cost_limit=ctx.cost_limit)
-        table_ft, total, table_cursor_line = format_combined_table(procs, idle, cursor)
+        try:
+            term_width = app.output.get_size().columns
+        except Exception:
+            term_width = None
+        table_ft, total, table_cursor_line = format_combined_table(procs, idle, cursor, term_width)
 
         # +1 for blank separator line between usage header and table
         usage_lines = sum(text.count("\n") for _, text in usage_ft) + 1
@@ -548,6 +565,7 @@ async def run(*args):
         state["pending"] = {
             "program": agent.get("program", ""),
             "session_id": agent.get("session_id", ""),
+            "source": agent.get("source", "builtin"),
             "text": input_buffer.text,
         }
         event.app.exit()
@@ -584,11 +602,22 @@ async def run(*args):
 
     # If the user submitted a command via the input pane, run it now
     if state["pending"]:
-        from system.execute import execute
+        from bin.ash import run_command
         pending = state["pending"]
         program = pending["program"]
         session_id = pending["session_id"]
+        source = pending.get("source", "builtin")
         text = pending["text"].strip()
-        extra_args = text.split() if text else []
-        cmd_args = ["--session", session_id] + extra_args
-        await execute(ctx, program, *cmd_args)
+
+        if source == "claude":
+            # Claude uses --resume <session_id> <prompt>
+            parts = ["claude", "--resume", session_id]
+            if text:
+                parts.append(text)
+            await run_command(" ".join(parts))
+        else:
+            # Built-in agents use <program> --session <session_id> <prompt>
+            parts = [program, "--session", session_id]
+            if text:
+                parts.extend(text.split())
+            await run_command(" ".join(parts))

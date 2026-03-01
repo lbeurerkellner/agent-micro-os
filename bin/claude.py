@@ -19,7 +19,7 @@ Usage: claude PROMPT
 """
 
 
-async def run(*args, env: dict = None, readonly=False, quiet=False, tool_use_mode=False):
+async def run(*args, env: dict = None, readonly=False, quiet=False):
     """Run the claude CLI in a Docker container.
 
     Usage: claude [--prefix PATH] [claude-args...]
@@ -44,6 +44,8 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, tool_use_mod
     if not ctx:
         cprint("claude: no context")
         return
+
+    tool_use_mode = not ctx.interactive
 
     # Parse optional --prefix; everything else goes to claude
     prefix = ""
@@ -78,9 +80,10 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, tool_use_mod
         "--build", str(_DOCKERFILE),
         "--prefix", prefix,
         "--uid", str(_NODE_UID),
-        # Persist only the two config files; ignore everything else in .claude/
+        # Persist config and session files; ignore the rest of .claude/
         "--no-version", "agent/.claude/.claude.json",
         "--no-version", "agent/.claude/.credentials.json",
+        "--no-version", "agent/.claude/projects/**/*.jsonl",
         "--ignore", "agent/.claude/**",
         "--cmd", cmd,
         env=merged_env,

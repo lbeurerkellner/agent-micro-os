@@ -1,10 +1,7 @@
 # Agent Environment
 
-You are operating inside a sandboxed Linux environment. 
-
-The working directory `/workspace` is a snapshot of a versioned vault — a filesystem that tracks all file changes with author, timestamp, and commit history. When your session ends, any changes you made under `/workspace` are automatically diffed and committed back to the vault.
-
-You have full access to standard Linux tools (bash, python, etc.). Use them freely.
+You are operating inside a versioned vault — a filesystem that tracks all file changes with author, timestamp, and commit history.
+{{SANDBOX_NOTE}}
 
 ## Filesystem Layout
 
@@ -12,9 +9,13 @@ You have full access to standard Linux tools (bash, python, etc.). Use them free
 - `/etc` - Configuration (model settings, crontab)
 - `/var` - Runtime data (logs, trajectories)
 
+## Executable Types
+
+There are two types of programs, agent programs and tool programs.
+
 ## Agent Programs
 
-Programs are text files with directives that define an LLM agent. They cannot be run from within this sandbox, but you can create or edit them for use by the host OS. Example:
+Agent programs are text files with directives that define an LLM agent. They cannot be run from within this sandbox, but you can create or edit them for use by the host OS. Example:
 
 ```
 .SYSTEM_PROMPT
