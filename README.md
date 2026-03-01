@@ -1,46 +1,97 @@
 # Agent Micro OS
 
-Toy implementation of a micro operating system in which programs are prompts, agents are processes, and the filesystem layer is a versioned sqlite database for time travel and recovery. 
+A virtual operating system for agents. Programs are prompts, agents are processes, and the filesystem is a versioned database for time travel and recovery. Supports OpenAI Agents SDK and Claude Code as execution engines, sandboxed tool execution via Docker, and a live process dashboard.
 
-Start by executing the following command (everything is sandboxed, don't worry about it):
-```python
+## Getting Started
+
+To get started, launch a new shell session inside the virtual OS (everything is sandboxed; each user ID has its own machine state).
+```
 uv run bin/ash.py --user bob --fsimage data.db
 ```
 
-You can then investigate the file system:
+Explore the filesystem:
 
 ```
 (/) > ls .
-etc/     # - configuration files, AGENTS.md
-models/  # - available models mounted as /models/<provider>/<model>; set OPENAI_API_KEY before launching to have gpt-5-mini mounted
-sbin/    # - built-in system commands, implemented in bin/ (ls, cat, etc.)
+etc/     # configuration files
+bin/     # user-defined tools and agent programs
+var/     # runtime data (logs, trajectories)
+sbin/    # built-in system commands (ls, cat, grep, etc.)
 ```
 
-To create your first agent (program), run the following command:
+Set `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` before launching to enable the respective agent types. You can also rely on Claude Code's built-in OAuth Sign In for authentication (just run `claude` and go through the standard flow).
+
+## Creating an Agent Program
+
+Create a simple agent:
 
 ```
-edit bin/greet
+(/) > edit bin/greet
 ```
 
-Paste the following content into the editor:
+Paste the following content into the editor and save with Ctrl-S:
 
 ```
 .PROMPT
 Greet the user in a silly way
 ```
 
-Save with Ctlr-S. You can then run your program with the following command:
+Then run it:
 
 ```
 (/) > greet
-Ahoy-hoy, space pickle! 🥒✨ How’s your brainbox buzzing today?
+Ahoy-hoy, space pickle! 🥒✨ How's your brainbox buzzing today?
 ```
 
-If you want to learn more about the OS, use the `man` command to learn about built-in commands and explore `/sbin`. Use `top` to observe currently active agents, use `usage` to see how many agents have run, and how many tokens they have used in the last 24h.
+### Program Directives
+
+Agent programs are text files with directives that define LLM agent behavior:
+
+| Directive | Description |
+|-----------|-------------|
+| `.PROMPT` | Required. The agent's instructions. |
+| `.INCLUDE <path>` | Inline another file's contents. |
+| `.MAX_TURNS <n>` | Limit agent turns (default: 10). |
+| `.INTERACTIVE` | Keep prompting for user input after each response. |
+| `.ENGINE native\|claude` | Execution engine — `native` (OpenAI agent SDK) or `claude` (Claude Code CLI). |
+| `.BUDGET <amount>` | Spending limit in USD for the program run. |
+
+### Execution Engines
+
+Programs run on the `native` engine (OpenAI agent SDK) by default. To use Claude instead:
+
+```
+.ENGINE claude --model sonnet
+.BUDGET 0.50
+.PROMPT
+You are a helpful coding assistant.
+.INTERACTIVE
+```
+
+Claude programs execute inside a sandboxed Docker container with the vault mounted at `/workspace`. Changes are automatically committed back.
+
+## Custom Tools
+
+Create tools as scripts in `/bin` with a `#!/bin/tool` shebang. The description follows on the shebang line, and the body is a Python script that runs in a sandboxed Docker container with the vault mounted at `/workspace`.
+
+```
+#!/bin/tool Count words in a file
+import sys
+with open(f'/workspace/{sys.argv[1]}') as f:
+    print(len(f.read().split()))
+```
+
+Save as `/bin/wordcount`, then use it from any agent via `ash wordcount myfile.txt`. Custom tools are automatically discovered and documented in agent system prompts.
+
+## Monitoring
+
+- **`top`** — Live interactive dashboard showing all active and recent agent sessions (both native and Claude). Navigate with arrow keys, press Enter to follow up on a session. Displays token usage, cost tracking, and per-model breakdowns.
+- **`usage`** — Token and cost summary for the last 24 hours.
+- **`help <command>`** — Built-in help for any command.
 
 ## General Purpose Agent
 
-To create a good, general purpose agent to get started with, you can use the following template, e.g. putting it in a file `/bin/agent`:
+A template for a capable interactive agent with persistent memory:
 
 ```
 .PROMPT
@@ -53,6 +104,13 @@ The included BRAIN content is provided as a system instruction and context. It i
 .INTERACTIVE
 ```
 
-This creates an agent with a `/agent/BRAIN.md` file for memory. All commands are accessible via the `ash` tool. If you need more commands, you can create them with `create_tool`.
+This creates an agent with a `/agent/BRAIN.md` file for memory. All commands are accessible via `ash`.
 
-A possible 
+## Scheduled Jobs
+
+Cron-style scheduling via `/etc/crontab`:
+
+```
+*/30 * * * * my_command arg1 arg2
+0 9 * * 1-5 daily_report
+```

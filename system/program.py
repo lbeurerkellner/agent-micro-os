@@ -68,7 +68,6 @@ def parse(contents: str):
 
     for line in lines:
         if line == ".SYSTEM_PROMPT":
-            # .SYSTEM_PROMPT is no longer supported; silently skip
             section = "system_prompt"
             continue
         elif line == ".PROMPT":
@@ -153,10 +152,14 @@ async def run_claude(context: SystemContext, program: Program, filepath: str, *a
         claude_args = [program.prompt]
     else:
         claude_args = ["-p", program.prompt]
+    claude_args.append("--allow-dangerously-skip-permissions")
     claude_args.append("--dangerously-skip-permissions")
 
     if program.budget is not None:
         claude_args.extend(["--max-budget-usd", str(program.budget)])
+
+    if program.system_prompt:
+        claude_args.extend(["--append-system-prompt", program.system_prompt])
 
     # Pass through extra flags from .ENGINE line (e.g. .ENGINE claude --model sonnet)
     if program.engine_flags:

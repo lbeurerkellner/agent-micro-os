@@ -1,4 +1,8 @@
 # TODO
+
+* system log, ensure commits work
+* show running claude sessions (even if metrics will be delayed)
+
 # Later
 
 * new runtime: pi

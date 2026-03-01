@@ -84,6 +84,7 @@ async def run(*args, env: dict = None, readonly=False, quiet=False):
         "--no-version", "agent/.claude/.claude.json",
         "--no-version", "agent/.claude/.credentials.json",
         "--no-version", "agent/.claude/projects/**/*.jsonl",
+        "--no-version", "agent/.claude/settings.json",
         "--ignore", "agent/.claude/**",
         "--cmd", cmd,
         env=merged_env,

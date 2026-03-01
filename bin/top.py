@@ -12,6 +12,22 @@ from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.layout import Layout
 
 
+def abbreviate_number(n: int) -> str:
+    """Format a number in abbreviated form: 3.2M, 10.2k, etc."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    elif n >= 1_000:
+        return f"{n / 1_000:.1f}k"
+    return str(n)
+
+
+def format_tokens(n: int, abbreviated: bool) -> str:
+    """Format a token count as either full comma-separated or abbreviated."""
+    if abbreviated:
+        return abbreviate_number(n)
+    return f"{n:,}"
+
+
 def parse_proc_entry(content: str) -> dict:
     """Parse a /proc entry into structured data.
 
@@ -186,7 +202,7 @@ def collect_idle_agents(vault, active_pids: set, active_sessions: set | None = N
     return idle
 
 
-def format_usage_header(stats: dict, cost_limit: float | None = None) -> list[tuple[str, str]]:
+def format_usage_header(stats: dict, cost_limit: float | None = None, abbreviated: bool = False) -> list[tuple[str, str]]:
     """Format system-wide usage stats as formatted text tuples with bold labels."""
     from bin.usage import format_cost_bar
 
@@ -204,16 +220,24 @@ def format_usage_header(stats: dict, cost_limit: float | None = None) -> list[tu
 
     ft: list[tuple[str, str]] = []
     ft.append(("bold", "Usage: "))
-    ft.append(("", f"{total:,} tokens ({total_in:,} in / {total_out:,} out) "))
+    ft.append(("", f"{format_tokens(total, abbreviated)} tokens ({format_tokens(total_in, abbreviated)} in / {format_tokens(total_out, abbreviated)} out) "))
     ft.append(("bold", "Sessions: "))
     ft.append(("", f"{sessions}{detail}\n"))
 
     if stats["models"]:
+        model_tokens = stats.get("model_tokens", {})
         sorted_models = sorted(stats["models"].items(), key=lambda x: -x[1])
         max_name = max(len(m) for m, _ in sorted_models)
         for model, count in sorted_models:
             padded = model.ljust(max_name)
-            ft.append(("", f"  {padded} | {count} session{'s' if count != 1 else ''}\n"))
+            mt = model_tokens.get(model, {})
+            m_in = mt.get("input_tokens", 0)
+            m_out = mt.get("output_tokens", 0)
+            ft.append(("", f"  {padded} | {count} session{'s' if count != 1 else ''}  "))
+            ft.append(("bold", "in "))
+            ft.append(("", f"{format_tokens(m_in, abbreviated)}  "))
+            ft.append(("bold", "out "))
+            ft.append(("", f"{format_tokens(m_out, abbreviated)}\n"))
 
     # Cost row with optional progress bar
     cost = stats.get("cost", 0.0)
@@ -295,12 +319,12 @@ def _build_header(widths: list[int]) -> str:
     return (" " * _COL_GAP).join(parts)
 
 
-def _format_row(proc: dict, widths: list[int]) -> str:
+def _format_row(proc: dict, widths: list[int], abbreviated: bool = False) -> str:
     parts = []
     for (_, key, _, _, align), w in zip(_COLS, widths):
         val = proc.get(key, "-")
         if key in ("input_tokens", "output_tokens"):
-            val = f"{val:,}"
+            val = format_tokens(val, abbreviated)
         elif key == "last_active":
             val = _format_age(val if val != "-" else None)
         else:
@@ -310,7 +334,7 @@ def _format_row(proc: dict, widths: list[int]) -> str:
     return (" " * _COL_GAP).join(parts)
 
 
-def format_combined_table(running: list[dict], idle: list[dict], cursor: int, term_width: int | None = None) -> tuple[list[tuple[str, str]], int, int]:
+def format_combined_table(running: list[dict], idle: list[dict], cursor: int, term_width: int | None = None, abbreviated: bool = False) -> tuple[list[tuple[str, str]], int, int]:
     """Format running and idle agents in one table with cursor highlighting.
 
     Returns (formatted_text, total_agents, cursor_line_within_table).
@@ -338,7 +362,7 @@ def format_combined_table(running: list[dict], idle: list[dict], cursor: int, te
         line += 1
         for i, proc in enumerate(running):
             style = "reverse" if i == cursor else ""
-            ft.append((style, _format_row(proc, widths) + "\n"))
+            ft.append((style, _format_row(proc, widths, abbreviated) + "\n"))
             if i == cursor:
                 cursor_line = line
             line += 1
@@ -350,7 +374,7 @@ def format_combined_table(running: list[dict], idle: list[dict], cursor: int, te
         for i, proc in enumerate(idle):
             abs_i = n_run + i
             style = "reverse" if abs_i == cursor else ""
-            ft.append((style, _format_row(proc, widths) + "\n"))
+            ft.append((style, _format_row(proc, widths, abbreviated) + "\n"))
             if abs_i == cursor:
                 cursor_line = line
             line += 1
@@ -383,6 +407,7 @@ async def run(*args):
         "idle": [],
         "usage_stats": None,
         "mode": "normal",   # "normal" | "input"
+        "abbreviated": False,  # toggle abbreviated number format (n key)
         "pending": None,    # {program, session_id, text} set before exit
     }
 
@@ -421,12 +446,13 @@ async def run(*args):
             return
 
         cursor = state["cursor"]
-        usage_ft = format_usage_header(stats, cost_limit=ctx.cost_limit)
+        abbr = state["abbreviated"]
+        usage_ft = format_usage_header(stats, cost_limit=ctx.cost_limit, abbreviated=abbr)
         try:
             term_width = app.output.get_size().columns
         except Exception:
             term_width = None
-        table_ft, total, table_cursor_line = format_combined_table(procs, idle, cursor, term_width)
+        table_ft, total, table_cursor_line = format_combined_table(procs, idle, cursor, term_width, abbreviated=abbr)
 
         # +1 for blank separator line between usage header and table
         usage_lines = sum(text.count("\n") for _, text in usage_ft) + 1
@@ -445,7 +471,7 @@ async def run(*args):
     def get_help_text():
         if state["mode"] == "input":
             return "top | Follow up with agent | Enter: run agent with prompt | Esc: cancel"
-        return "top | q: quit | ↑↓ / j k: move | PgUp PgDn: page | g: top | Enter: open | (refreshes every 1s)"
+        return "top | q: quit | ↑↓ / j k: move | PgUp PgDn: page | g: top | n: abbrev | Enter: open | (refreshes every 1s)"
 
     def get_input_prompt():
         agents = state["agents"]
@@ -530,6 +556,12 @@ async def run(*args):
     @kb.add("pagedown", filter=~in_input_mode)
     def page_down(event):
         _move_cursor(10)
+
+    @kb.add("n", filter=~in_input_mode)
+    def toggle_abbreviated(event):
+        state["abbreviated"] = not state["abbreviated"]
+        render_display()
+        app.invalidate()
 
     @kb.add("home", filter=~in_input_mode)
     @kb.add("g", filter=~in_input_mode)

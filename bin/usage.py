@@ -101,6 +101,7 @@ def aggregate(trajectories: list[dict]) -> dict:
     :return: dict with sessions, completed, errors, input_tokens, output_tokens, models
     """
     models: dict[str, int] = {}
+    model_tokens: dict[str, dict[str, int]] = {}  # model -> {input_tokens, output_tokens}
     total_input = 0
     total_output = 0
     total_cost = 0.0
@@ -118,6 +119,10 @@ def aggregate(trajectories: list[dict]) -> dict:
         model = t.get("model")
         if model:
             models[model] = models.get(model, 0) + 1
+            if model not in model_tokens:
+                model_tokens[model] = {"input_tokens": 0, "output_tokens": 0}
+            model_tokens[model]["input_tokens"] += t["input_tokens"]
+            model_tokens[model]["output_tokens"] += t["output_tokens"]
 
     return {
         "sessions": len(trajectories),
@@ -127,6 +132,7 @@ def aggregate(trajectories: list[dict]) -> dict:
         "output_tokens": total_output,
         "cost": total_cost,
         "models": models,
+        "model_tokens": model_tokens,
     }
 
 
