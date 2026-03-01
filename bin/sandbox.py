@@ -1,5 +1,9 @@
 from system.context import cprint
 
+# Bold grey for control messages so container output stands out
+_DIM = "\033[1;90m"
+_RST = "\033[0m"
+
 
 _TOOL_SHEBANG_SETUP = (
     "printf '#!/bin/sh\\nif [ ! -f \"$1\" ]; then shift; fi\\nexec python3 \"$@\"\\n'"
@@ -38,7 +42,7 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
 
     ctx = SystemContext.current()
     if not ctx:
-        cprint("sandbox: no context")
+        cprint(f"{_DIM}sandbox: no context{_RST}")
         return
 
     # Parse args
@@ -80,7 +84,7 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
             prefix = args[i]
             i += 1
         else:
-            cprint(f"sandbox: unknown option '{args[i]}'")
+            cprint(f"{_DIM}sandbox: unknown option '{args[i]}'{_RST}")
             return
 
     # Build image if requested and not yet present
@@ -94,9 +98,6 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
 
     # Inject dynamically generated etc/AGENTS.md into the export
     _inject_agents_md(tar_buf, snapshot, ctx.fs(), uid=uid, gid=uid, filename=agents_md_name)
-
-    if not quiet:
-        cprint(f"Exported {len(snapshot)} files")
 
     client = docker.from_env()
     vol_name = f"vault-{uuid.uuid4().hex[:12]}"
@@ -127,7 +128,7 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
 
         # Launch container
         if not quiet:
-            cprint(f"Launching {image}...")
+            cprint(f"{_DIM}{image}, {len(snapshot)} files exported{_RST}")
         tty_flags = [] if capture else ["-it"]
         docker_args = ["docker", "run", "--rm",
                         *tty_flags,
@@ -166,7 +167,7 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
         current = _read_volume(client, vol_name)
         if readonly:
             if not quiet:
-                cprint("Discarding changes (--readonly mode).")
+                cprint(f"{_DIM}Discarding changes (--readonly mode).{_RST}")
             if capture:
                 return f"{output}\n[exit code: {exit_code}]"
             else:
@@ -181,8 +182,6 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
             return exit_code == 0
     finally:
         vol.remove()
-        if not quiet:
-            cprint(f"Volume {vol_name} removed")
 
 
 def _export_to_tar(vault, prefix, uid=0, gid=0):
@@ -328,11 +327,11 @@ def _diff_and_commit(vault, snapshot, current, prefix, quiet=False,
 
     if not added and not removed and not modified:
         if not quiet:
-            cprint("No changes.")
+            cprint(f"{_DIM}No changes.{_RST}")
         return
 
     if not quiet:
-        cprint(f"{len(added)} added, {len(modified)} modified, {len(removed)} removed")
+        cprint(f"{_DIM}{len(added)} added, {len(modified)} modified, {len(removed)} removed")
         # List added/modified/removed files
         for fp in sorted(added):
             cprint(f"  + {fp}")
@@ -340,6 +339,7 @@ def _diff_and_commit(vault, snapshot, current, prefix, quiet=False,
             cprint(f"  ~ {fp}")
         for fp in sorted(removed):
             cprint(f"  - {fp}")
+        cprint(_RST, end="")
 
     vault.begin_commit()
     for fp in added | modified:
@@ -349,7 +349,7 @@ def _diff_and_commit(vault, snapshot, current, prefix, quiet=False,
     vault.end_commit(f"sandbox: +{len(added)} ~{len(modified)} -{len(removed)}")
 
     if not quiet:
-        cprint("Committed.")
+        cprint(f"{_DIM}Committed.{_RST}")
 
 
 async def _ensure_image(image, dockerfile, quiet=False):
@@ -371,7 +371,7 @@ async def _ensure_image(image, dockerfile, quiet=False):
         raise FileNotFoundError(f"sandbox: Dockerfile not found: {dockerfile}")
 
     if not quiet:
-        cprint(f"Building image {image} from {dockerfile} ...")
+        cprint(f"{_DIM}Building image {image} from {dockerfile} ...{_RST}")
 
     proc = await asyncio.create_subprocess_exec(
         "docker", "build", "-t", image, "-f", str(dockerfile), str(dockerfile.parent),
@@ -380,4 +380,4 @@ async def _ensure_image(image, dockerfile, quiet=False):
         raise RuntimeError(f"sandbox: failed to build image {image}")
 
     if not quiet:
-        cprint(f"Image {image} built.")
+        cprint(f"{_DIM}Image {image} built.{_RST}")

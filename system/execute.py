@@ -53,7 +53,7 @@ async def execute(ctx, filepath, *args):
         cprint(f"{filepath}: unsupported interpreter: {shebang}", file=ctx.stderr)
         return
 
-    # check for .PROMPT directive (may appear after .SYSTEM_PROMPT or other directives)
+    # check for .PROMPT directive (may appear after other directives like .ENGINE, .BUDGET)
     if "\n.PROMPT\n" not in contents and not contents.startswith(".PROMPT\n"):
         cprint(f"{filepath} is not executable", file=ctx.stderr)
         return

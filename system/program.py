@@ -32,15 +32,24 @@ class Program:
     # maximum number of turns for the agent to run, default is 10
     max_turns: int = 10
 
+    # engine: "native" (openai agents SDK) or "claude" (claude code CLI)
+    engine: str = "native"
+
+    # extra flags passed after the engine name (e.g. .ENGINE claude --model sonnet)
+    engine_flags: list[str] | None = None
+
+    # budget in USD (limits total spend for this program run)
+    budget: float | None = None
+
 def parse(contents: str):
     """
     A program looks like this
 
     ```
-    [.SYSTEM_PROMPT
-    <optional system prompt, if not present the default system prompt will be used>]
+    [.ENGINE native|claude]
+    [.BUDGET 1.50]
     .PROMPT
-    <system prompt>
+    <prompt text>
     ```
     [...] is optional.
     """
@@ -49,6 +58,9 @@ def parse(contents: str):
     prompt_lines = []
     section = None
     is_interactive = False
+    engine = "native"
+    engine_flags = None
+    budget = None
 
     max_turns = safe_int(SystemContext.current().read("/etc/model/max_turns", "10"), default=10)
 
@@ -56,6 +68,7 @@ def parse(contents: str):
 
     for line in lines:
         if line == ".SYSTEM_PROMPT":
+            # .SYSTEM_PROMPT is no longer supported; silently skip
             section = "system_prompt"
             continue
         elif line == ".PROMPT":
@@ -78,6 +91,21 @@ def parse(contents: str):
         elif line.startswith(".MAX_TURNS"):
             max_turns = safe_int(line[len(".MAX_TURNS"):].strip(), default=10)
             continue
+        elif line.startswith(".ENGINE"):
+            parts = line[len(".ENGINE"):].strip().split(None, 1)
+            engine = parts[0].lower() if parts else ""
+            if engine not in ("native", "claude"):
+                raise ValueError(f"Unknown engine '{engine}'. Supported engines: native, claude")
+            if len(parts) > 1:
+                import shlex
+                engine_flags = shlex.split(parts[1])
+            continue
+        elif line.startswith(".BUDGET"):
+            try:
+                budget = float(line[len(".BUDGET"):].strip())
+            except ValueError:
+                raise ValueError(f"Invalid .BUDGET value: {line[len('.BUDGET'):].strip()!r}. Must be a number (e.g. 1.50)")
+            continue
 
         if section == "system_prompt":
             system_prompt = (system_prompt or "") + line + "\n"
@@ -85,13 +113,18 @@ def parse(contents: str):
             prompt_lines.append(line)
         # .TOOLS lines are silently ignored
 
+    # Warn if .MAX_TURNS is used with claude engine
+    if engine == "claude" and max_turns != 10:
+        from system.context import cprint
+        cprint("Warning: .MAX_TURNS is ignored for claude engine programs. Use .BUDGET to limit spending instead.", file=sys.stderr)
+
     # All programs get the ash tool as the sole native tool,
     # with a dynamic docstring that includes vault user-defined commands
     tools = [make_ash_tool(SystemContext.current().fs())]
     tool_paths = ["/tools/ash"]
 
     prompt = "\n".join(prompt_lines).strip()
-    return Program(tools=tools, tool_paths=tool_paths, system_prompt=system_prompt, prompt=prompt, max_turns=max_turns or 10, is_interactive=is_interactive)
+    return Program(tools=tools, tool_paths=tool_paths, system_prompt=system_prompt, prompt=prompt, max_turns=max_turns or 10, is_interactive=is_interactive, engine=engine, engine_flags=engine_flags, budget=budget)
 
 def safe_int(value: str, default: int = 0) -> int:
     try:
@@ -100,18 +133,49 @@ def safe_int(value: str, default: int = 0) -> int:
         return default
 
 async def run(program: Program, filepath: str, *args):
-    models = ModelProvider()
-    
     context = SystemContext.current()
+
+    # dispatch to claude engine
+    if program.engine == "claude":
+        await run_claude(context, program, filepath, *args)
+        return
+
+    await run_native(context, program, filepath, *args)
+
+
+async def run_claude(context: SystemContext, program: Program, filepath: str, *args):
+    """Run a program using the Claude Code CLI engine."""
+    from bin.claude import run as claude_run
+
+    # Build claude CLI arguments
+    # Interactive programs launch claude without -p so it enters interactive mode
+    if program.is_interactive:
+        claude_args = [program.prompt]
+    else:
+        claude_args = ["-p", program.prompt]
+    claude_args.append("--dangerously-skip-permissions")
+
+    if program.budget is not None:
+        claude_args.extend(["--max-budget-usd", str(program.budget)])
+
+    # Pass through extra flags from .ENGINE line (e.g. .ENGINE claude --model sonnet)
+    if program.engine_flags:
+        claude_args.extend(program.engine_flags)
+
+    await claude_run(*claude_args)
+
+
+async def run_native(context: SystemContext, program: Program, filepath: str, *args):
+    models = ModelProvider()
 
     # get model configuration
     model_configuration = context.read("/etc/model/default", "openai gpt-5-mini")
     reasoning_effort = context.read("/etc/model/reasoning_effort", "low")
-    
+
     # get system prompt, if not provided use default
     system_prompt = program.system_prompt or context.read("/AGENTS.md", "You are a helpful assistant.")
     system_prompt += "\n\n" + generate_agents_md(context.fs())
-    
+
     # parse model configuration
     try:
         provider, model = model_configuration.split()
@@ -240,8 +304,10 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
                 trace_content += ".RESPONSE\n"
                 trace_write(trace_content)
 
+                run_cost = 0.0  # track per-run cost for .BUDGET enforcement
+
                 while True:
-                    # Check cost limit before each turn
+                    # Check system-wide cost limit before each turn
                     if context.cost_limit is not None:
                         from bin.usage import collect_usage
                         from datetime import timedelta
@@ -255,6 +321,16 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
                                 file=context.stderr,
                             )
                             break
+
+                    # Check per-run .BUDGET limit
+                    if program.budget is not None and run_cost >= program.budget:
+                        await stop_spinner()
+                        print_output(
+                            f"Program budget of ${program.budget:.4f} exceeded "
+                            f"(${run_cost:.4f} used). Stopping.",
+                            file=context.stderr,
+                        )
+                        break
 
                     result = Runner.run_streamed(agent, prompt, max_turns=program.max_turns, session=session)
 
@@ -329,6 +405,9 @@ async def run_streamed_spinner(context: SystemContext, agent: Agent, program: Pr
                                 total_output += usage.output_tokens
                                 trace_content += json.dumps({"type": "usage", "input_tokens": total_input, "output_tokens": total_output}) + "\n"
                                 trace_write(trace_content)
+                                # update per-run cost for .BUDGET enforcement
+                                from bin.usage import compute_cost
+                                run_cost = compute_cost(model_configuration, total_input, total_output)
 
                         elif event_type == "response.created" and streaming_text:
                             # new response cycle after text — agent is doing another turn

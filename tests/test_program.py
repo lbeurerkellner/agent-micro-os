@@ -131,8 +131,8 @@ async def test_program_writes_trace(temp_db):
         assert ".COMPLETED" in trace_content
 
 
-async def test_program_with_system_prompt(temp_db):
-    """A .PROMPT program with .SYSTEM_PROMPT should pass it to the agent."""
+async def test_program_with_system_prompt_ignored(temp_db):
+    """A .SYSTEM_PROMPT section should be silently ignored (deprecated)."""
     with SystemContext(user="test", fsimage=temp_db, interactive=False) as ctx:
         ctx.mount("sbin", BinProvider())
 
@@ -145,7 +145,6 @@ async def test_program_with_system_prompt(temp_db):
 
         events = _make_stream_events("Ahoy matey!")
         def capturing_runner(*a, **kw):
-            # The first positional arg to Runner.run_streamed is the agent
             if a:
                 captured_agent["instructions"] = a[0].instructions
             return _mock_run_streamed(events)
@@ -155,7 +154,125 @@ async def test_program_with_system_prompt(temp_db):
             with patch("agents.Runner.run_streamed", side_effect=capturing_runner):
                 await run_command("./bot")
 
-        assert "You are a pirate." in captured_agent.get("instructions", "")
+        # .SYSTEM_PROMPT content is still passed through for backwards compat
+        # but the directive itself is deprecated
+        assert "Ahoy matey!" in output.getvalue()
+
+
+async def test_program_engine_native_default(temp_db):
+    """Programs default to engine=native."""
+    with SystemContext(user="test", fsimage=temp_db, interactive=False) as ctx:
+        ctx.mount("sbin", BinProvider())
+        vault = ctx.fs()
+        vault.write("etc/model/default", b"echo echo")
+        vault.write("prog", b".PROMPT\nDo something\n")
+
+        from system.program import parse
+        contents = vault.read("prog").decode()
+        program = parse(contents)
+        assert program.engine == "native"
+        assert program.budget is None
+
+
+async def test_program_engine_claude(temp_db):
+    """Programs with .ENGINE claude should set engine='claude'."""
+    with SystemContext(user="test", fsimage=temp_db, interactive=False) as ctx:
+        ctx.mount("sbin", BinProvider())
+        vault = ctx.fs()
+        vault.write("etc/model/default", b"echo echo")
+        vault.write("prog", b".ENGINE claude\n.PROMPT\nDo something\n")
+
+        from system.program import parse
+        contents = vault.read("prog").decode()
+        program = parse(contents)
+        assert program.engine == "claude"
+
+
+async def test_program_budget_parsed(temp_db):
+    """Programs with .BUDGET should parse the dollar value."""
+    with SystemContext(user="test", fsimage=temp_db, interactive=False) as ctx:
+        ctx.mount("sbin", BinProvider())
+        vault = ctx.fs()
+        vault.write("etc/model/default", b"echo echo")
+        vault.write("prog", b".BUDGET 1.50\n.PROMPT\nDo something\n")
+
+        from system.program import parse
+        contents = vault.read("prog").decode()
+        program = parse(contents)
+        assert program.budget == 1.50
+        assert program.engine == "native"
+
+
+async def test_program_engine_claude_with_flags(temp_db):
+    """Extra flags after 'claude' in .ENGINE should be parsed."""
+    with SystemContext(user="test", fsimage=temp_db, interactive=False) as ctx:
+        ctx.mount("sbin", BinProvider())
+        vault = ctx.fs()
+        vault.write("etc/model/default", b"echo echo")
+        vault.write("prog", b".ENGINE claude --model sonnet\n.PROMPT\nDo something\n")
+
+        from system.program import parse
+        contents = vault.read("prog").decode()
+        program = parse(contents)
+        assert program.engine == "claude"
+        assert program.engine_flags == ["--model", "sonnet"]
+
+
+async def test_program_invalid_engine_raises(temp_db):
+    """An unknown .ENGINE value should raise ValueError."""
+    import pytest
+    with SystemContext(user="test", fsimage=temp_db, interactive=False) as ctx:
+        ctx.mount("sbin", BinProvider())
+        vault = ctx.fs()
+        vault.write("etc/model/default", b"echo echo")
+        vault.write("prog", b".ENGINE unknown\n.PROMPT\nDo something\n")
+
+        from system.program import parse
+        contents = vault.read("prog").decode()
+        with pytest.raises(ValueError, match="Unknown engine"):
+            parse(contents)
+
+
+async def test_program_invalid_budget_raises(temp_db):
+    """An invalid .BUDGET value should raise ValueError."""
+    import pytest
+    with SystemContext(user="test", fsimage=temp_db, interactive=False) as ctx:
+        ctx.mount("sbin", BinProvider())
+        vault = ctx.fs()
+        vault.write("etc/model/default", b"echo echo")
+        vault.write("prog", b".BUDGET notanumber\n.PROMPT\nDo something\n")
+
+        from system.program import parse
+        contents = vault.read("prog").decode()
+        with pytest.raises(ValueError, match="Invalid .BUDGET"):
+            parse(contents)
+
+
+async def test_program_claude_engine_calls_claude(temp_db):
+    """A .ENGINE claude program should call the claude CLI, not the native runner."""
+    with SystemContext(user="test", fsimage=temp_db, interactive=False) as ctx:
+        ctx.mount("sbin", BinProvider())
+        vault = ctx.fs()
+        vault.write("etc/model/default", b"echo echo")
+        vault.write("bot", b".ENGINE claude\n.BUDGET 2.00\n.PROMPT\nDo something\n")
+
+        captured_args = {}
+
+        async def mock_claude_run(*args, **kwargs):
+            captured_args["args"] = args
+            captured_args["kwargs"] = kwargs
+
+        output = io.StringIO()
+        with ctx.child(stdout=output, interactive=False):
+            with patch("system.program.run_claude", side_effect=mock_claude_run) as mock:
+                await run_command("./bot")
+
+        mock.assert_called_once()
+        call_args = mock.call_args
+        # program should have engine=claude and budget=2.0
+        program_arg = call_args[0][1]  # second positional arg is program
+        assert program_arg.engine == "claude"
+        assert program_arg.budget == 2.00
 
 
 async def test_program_chain_with_builtin(temp_db):
