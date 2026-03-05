@@ -75,22 +75,31 @@ async def run(*args, env: dict = None, readonly=False, quiet=False):
 
     cmd = "claude " + " ".join(shlex.quote(a) for a in claude_args) if claude_args else "claude"
 
-    return await sandbox_run(
-        "--image", _IMAGE,
-        "--build", str(_DOCKERFILE),
-        "--prefix", prefix,
-        "--uid", str(_NODE_UID),
-        # Persist config and session files; ignore the rest of .claude/
-        "--no-version", "agent/.claude/.claude.json",
-        "--no-version", "agent/.claude/.credentials.json",
-        "--no-version", "agent/.claude/projects/**/*.jsonl",
-        "--no-version", "agent/.claude/settings.json",
-        "--ignore", "agent/.claude/**",
-        "--cmd", cmd,
-        env=merged_env,
-        readonly=readonly,
-        quiet=quiet,
-        capture=tool_use_mode,  # Capture output for tool use mode
-        agents_md_name="CLAUDE.md",
-        tool_shebang=False # claude image has it built-in
-    )
+    # Register as an active process so it shows up in top
+    import uuid
+    call_id = uuid.uuid4().hex[:8]
+    prompt_summary = " ".join(claude_args)[:60] if claude_args else ""
+    ctx.register_agent(call_id, f"claude: {prompt_summary}", "")
+
+    try:
+        return await sandbox_run(
+            "--image", _IMAGE,
+            "--build", str(_DOCKERFILE),
+            "--prefix", prefix,
+            "--uid", str(_NODE_UID),
+            # Persist config and session files; ignore the rest of .claude/
+            "--no-version", "agent/.claude/.claude.json",
+            "--no-version", "agent/.claude/.credentials.json",
+            "--no-version", "agent/.claude/projects/**/*.jsonl",
+            "--no-version", "agent/.claude/settings.json",
+            "--ignore", "agent/.claude/**",
+            "--cmd", cmd,
+            env=merged_env,
+            readonly=readonly,
+            quiet=quiet,
+            capture=tool_use_mode,  # Capture output for tool use mode
+            agents_md_name="CLAUDE.md",
+            tool_shebang=False  # claude image has it built-in
+        )
+    finally:
+        ctx.unregister_agent(call_id)

@@ -195,6 +195,7 @@ def collect_idle_agents(vault, active_pids: set, active_sessions: set | None = N
             "tool_calls": s.tool_calls,
             "input_tokens": s.input_tokens,
             "output_tokens": s.output_tokens,
+            "estimated_output": s.estimated_output,
             "last_active": s.timestamp,
             "source": s.source,
         })
@@ -325,6 +326,8 @@ def _format_row(proc: dict, widths: list[int], abbreviated: bool = False) -> str
         val = proc.get(key, "-")
         if key in ("input_tokens", "output_tokens"):
             val = format_tokens(val, abbreviated)
+            if key == "output_tokens" and proc.get("estimated_output"):
+                val = "~" + val
         elif key == "last_active":
             val = _format_age(val if val != "-" else None)
         else:
@@ -334,10 +337,13 @@ def _format_row(proc: dict, widths: list[int], abbreviated: bool = False) -> str
     return (" " * _COL_GAP).join(parts)
 
 
-def format_combined_table(running: list[dict], idle: list[dict], cursor: int, term_width: int | None = None, abbreviated: bool = False) -> tuple[list[tuple[str, str]], int, int]:
+def format_combined_table(running: list[dict], idle: list[dict], cursor: int, term_width: int | None = None, abbreviated: bool = False, visible_rows: int | None = None) -> tuple[list[tuple[str, str]], int]:
     """Format running and idle agents in one table with cursor highlighting.
 
-    Returns (formatted_text, total_agents, cursor_line_within_table).
+    When *visible_rows* is set, only a window of that many rows around the
+    cursor is rendered (with a scroll indicator).
+
+    Returns (formatted_text, total_agents).
     """
     widths = _compute_col_widths(term_width)
     ft: list[tuple[str, str]] = []
@@ -347,41 +353,52 @@ def format_combined_table(running: list[dict], idle: list[dict], cursor: int, te
     for proc in idle:
         proc["status"] = "IDLE"
 
+    # Build flat list of all rows with their absolute index
+    all_rows: list[tuple[int, dict, str]] = []  # (abs_index, proc, section)
+    for i, proc in enumerate(running):
+        all_rows.append((i, proc, "running"))
+    for i, proc in enumerate(idle):
+        all_rows.append((len(running) + i, proc, "idle"))
+
+    total = len(all_rows)
+
     header = _build_header(widths)
-    sep = " " * len(header)
-
     ft.append(("bold", header + "\n"))
-    line = 1
 
-    n_run = len(running)
-    total = n_run + len(idle)
-    cursor_line = 0
+    if total == 0:
+        ft.append(("", "  No recent agents.\n"))
+        return ft, 0
 
-    if running:
-        ft.append(("", sep + "\n"))
-        line += 1
-        for i, proc in enumerate(running):
-            style = "reverse" if i == cursor else ""
-            ft.append((style, _format_row(proc, widths, abbreviated) + "\n"))
-            if i == cursor:
-                cursor_line = line
-            line += 1
-
-    ft.append(("", sep + "\n"))
-    line += 1
-
-    if idle:
-        for i, proc in enumerate(idle):
-            abs_i = n_run + i
-            style = "reverse" if abs_i == cursor else ""
-            ft.append((style, _format_row(proc, widths, abbreviated) + "\n"))
-            if abs_i == cursor:
-                cursor_line = line
-            line += 1
+    # Determine visible slice
+    if visible_rows is not None and visible_rows < total:
+        # Centre the cursor in the visible window
+        half = visible_rows // 2
+        start = cursor - half
+        start = max(0, min(start, total - visible_rows))
+        end = start + visible_rows
     else:
-        ft.append(("", "  No recent idle agents.\n"))
+        start = 0
+        end = total
 
-    return ft, total, cursor_line
+    # Scroll-up indicator
+    if start > 0:
+        ft.append(("italic", f"  ... {start} more above\n"))
+
+    # Render visible rows, inserting section separators
+    prev_section = None
+    for row_idx in range(start, end):
+        abs_i, proc, section = all_rows[row_idx]
+        if prev_section is not None and section != prev_section:
+            ft.append(("", "\n"))
+        prev_section = section
+        style = "reverse" if abs_i == cursor else ""
+        ft.append((style, _format_row(proc, widths, abbreviated) + "\n"))
+
+    # Scroll-down indicator
+    if end < total:
+        ft.append(("italic", f"  ... {total - end} more below\n"))
+
+    return ft, total
 
 
 async def run(*args):
@@ -401,7 +418,6 @@ async def run(*args):
         "text": [("", "Loading...")],
         "cursor": 0,
         "total": 0,
-        "cursor_line": 0,
         "agents": [],
         "procs": [],
         "idle": [],
@@ -449,14 +465,20 @@ async def run(*args):
         abbr = state["abbreviated"]
         usage_ft = format_usage_header(stats, cost_limit=ctx.cost_limit, abbreviated=abbr)
         try:
-            term_width = app.output.get_size().columns
+            term_size = app.output.get_size()
+            term_width = term_size.columns
+            term_rows = term_size.rows
         except Exception:
             term_width = None
-        table_ft, total, table_cursor_line = format_combined_table(procs, idle, cursor, term_width, abbreviated=abbr)
+            term_rows = 24
 
-        # +1 for blank separator line between usage header and table
-        usage_lines = sum(text.count("\n") for _, text in usage_ft) + 1
-        state["cursor_line"] = usage_lines + table_cursor_line
+        # Calculate how many rows are available for the agent list:
+        # total rows - help bar (1) - spacer (1) - usage header - separator - table header (1)
+        usage_lines = sum(text.count("\n") for _, text in usage_ft)
+        chrome = 2 + usage_lines + 1 + 1  # help, spacer, usage header, blank sep, table header
+        visible_rows = max(3, term_rows - chrome)
+
+        table_ft, _total = format_combined_table(procs, idle, cursor, term_width, abbreviated=abbr, visible_rows=visible_rows)
 
         ft: list[tuple[str, str]] = []
         ft.extend(usage_ft)
@@ -518,25 +540,12 @@ async def run(*args):
     def ctrl_c(event):
         event.app.exit()
 
-    def _ensure_cursor_visible():
-        line = state["cursor_line"]
-        try:
-            height = app.output.get_size().rows - 3  # minus help bar and spacer
-        except Exception:
-            height = 20
-        scroll = body_window.vertical_scroll
-        if line < scroll:
-            body_window.vertical_scroll = line
-        elif line >= scroll + height - 1:
-            body_window.vertical_scroll = max(0, line - height + 2)
-
     def _move_cursor(delta):
         total = state["total"]
         if total == 0:
             return
         state["cursor"] = max(0, min(state["cursor"] + delta, total - 1))
         render_display()
-        _ensure_cursor_visible()
         app.invalidate()
 
     @kb.add("up", filter=~in_input_mode)

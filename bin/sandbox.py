@@ -121,9 +121,14 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
                 remove=True,
             )
 
-        # prepare env arguments
+        # prepare env arguments – always sync host timezone
+        import os
+        import time as _time
+        env = dict(env or {})
+        if "TZ" not in env:
+            env["TZ"] = os.environ.get("TZ") or _time.tzname[0]
         env_args = []
-        for k, v in (env or {}).items():
+        for k, v in env.items():
             env_args.extend(["-e", f"{k}={v}"])
 
         # Launch container

@@ -23,6 +23,7 @@ class AgentSession:
     tool_calls: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    estimated_output: bool = False  # True when output_tokens is a heuristic
     status: str = "completed"  # completed | error | in_progress
     timestamp: str | None = None  # ISO-8601, last activity
     source: str = "builtin"  # e.g. "builtin", "claude"
@@ -101,6 +102,13 @@ def parse_claude_session(content: str) -> AgentSession:
     output_tokens = 0
     last_timestamp = None
 
+    # Track per-message-id usage so we only count each API call once.
+    # Claude Code writes multiple JSONL entries per API response (one per
+    # content block); intermediate entries carry partial usage counters.
+    # We keep the last (largest) usage seen per message id.
+    msg_usage: dict[str, dict] = {}  # msg_id -> usage dict
+    output_chars = 0  # total assistant output text for token estimation
+
     for line in content.splitlines():
         if not line.startswith("{"):
             continue
@@ -130,21 +138,49 @@ def parse_claude_session(content: str) -> AgentSession:
             if isinstance(content_val, str) and not obj.get("isMeta"):
                 turns += 1
 
-        # Count tool calls from assistant messages
+        # Count tool calls and accumulate output text from assistant messages
         if msg.get("role") == "assistant":
             content_val = msg.get("content")
             if isinstance(content_val, list):
                 for block in content_val:
-                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                    if not isinstance(block, dict):
+                        continue
+                    btype = block.get("type")
+                    if btype == "tool_use":
                         tool_calls += 1
+                        output_chars += len(json.dumps(block.get("input", {})))
+                    elif btype == "thinking":
+                        output_chars += len(block.get("thinking", ""))
+                    elif btype == "text":
+                        output_chars += len(block.get("text", ""))
 
-        # Accumulate token usage from assistant messages
+        # Record per-message usage (last entry per id wins)
         usage = msg.get("usage")
+        msg_id = msg.get("id")
         if usage and msg.get("role") == "assistant":
-            input_tokens += usage.get("input_tokens", 0)
-            input_tokens += usage.get("cache_read_input_tokens", 0)
-            input_tokens += usage.get("cache_creation_input_tokens", 0)
-            output_tokens += usage.get("output_tokens", 0)
+            if msg_id:
+                msg_usage[msg_id] = usage
+            else:
+                # No message id — accumulate directly (e.g. older formats)
+                input_tokens += usage.get("input_tokens", 0)
+                input_tokens += usage.get("cache_read_input_tokens", 0)
+                input_tokens += usage.get("cache_creation_input_tokens", 0)
+                output_tokens += usage.get("output_tokens", 0)
+
+    # Aggregate usage across unique API calls
+    for usage in msg_usage.values():
+        input_tokens += usage.get("input_tokens", 0)
+        input_tokens += usage.get("cache_read_input_tokens", 0)
+        input_tokens += usage.get("cache_creation_input_tokens", 0)
+        output_tokens += usage.get("output_tokens", 0)
+
+    # The JSONL often has unreliable output_tokens in streamed chunks.
+    # Estimate from actual content (~4 chars/token) and use whichever is
+    # larger.
+    estimated = output_chars // 4
+    used_estimate = estimated > output_tokens
+    if used_estimate:
+        output_tokens = estimated
 
     return AgentSession(
         session_id=session_id or "-",
@@ -154,6 +190,7 @@ def parse_claude_session(content: str) -> AgentSession:
         tool_calls=tool_calls,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
+        estimated_output=used_estimate,
         status="completed",
         timestamp=last_timestamp,
         source="claude",

@@ -1,15 +1,16 @@
 # TODO
 
-* system log, ensure commits work
-* show running claude sessions (even if metrics will be delayed)
+* system log (files and agent runs), ensure commits work
+
+* executable permission system for CLIs, .READONLY, .ONLY_PASSED_FILES, .NETWORK, .TIMELIMIT, .TOKENLIMIT, .COSTLIMIT, .MODEL
+    - no internet
+    - no custom tools
+    - only certain parts of vault mounted
+    - readonly where only output is written back
 
 # Later
 
 * new runtime: pi
-
-- add 'fork' for a continue under a new /proc. Sort 'top' by most recent, with a clear separator on 'active'/'very recently active' ones
-
-* executable permission system for tools/CLIs .READONLY, .ONLY_PASSED_FILES, .NETWORK, .TIMELIMIT, .TOKENLIMIT, .COSTLIMIT, .MODEL
 
 * jq command, sed
 
