@@ -7,9 +7,8 @@ name = "fs"
 version = "0.1.0"
 description = "A simple, versioned vault for agents."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = "==3.11.*"
 dependencies = [
-    "agentpy",
     "docker>=7.1.0",
     "fusepy>=3.0.1",
     "litellm>=1.81.6",
@@ -39,9 +38,6 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
-
-[tool.uv.sources]
-agentpy = { git = "https://github.com/lbeurerkellner/agent.py.git" }
 
 [dependency-groups]
 dev = [
