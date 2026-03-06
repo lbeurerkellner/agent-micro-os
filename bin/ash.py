@@ -6,7 +6,6 @@ import readline
 import signal
 from pathlib import Path
 
-import termcolor
 
 from system.context import SystemContext, cprint
 from system.execute import execute

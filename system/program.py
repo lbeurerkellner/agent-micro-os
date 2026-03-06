@@ -146,12 +146,17 @@ async def run_claude(context: SystemContext, program: Program, filepath: str, *a
     """Run a program using the Claude Code CLI engine."""
     from bin.claude import run as claude_run
 
+    program_prompt = program.prompt
+    # append args-based prompt
+    if args:
+        program_prompt += "\n\nThe user has now entered the following:\n" + " ".join(args)
+
     # Build claude CLI arguments
     # Interactive programs launch claude without -p so it enters interactive mode
     if program.is_interactive:
-        claude_args = [program.prompt]
+        claude_args = [program_prompt]
     else:
-        claude_args = ["-p", program.prompt]
+        claude_args = ["-p", program_prompt]
     claude_args.append("--allow-dangerously-skip-permissions")
     claude_args.append("--dangerously-skip-permissions")
 
