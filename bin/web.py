@@ -462,7 +462,7 @@ def main():
 
     if args.hash_password:
         hashed = bcrypt.hashpw(args.hash_password.encode(), bcrypt.gensalt()).decode()
-        print(hashed)
+        print(hashed)  # no-ctx-print
         sys.exit(0)
 
     if not args.fsimage or not args.passwd:
@@ -473,11 +473,11 @@ def main():
     PASSWD = load_passwd(args.passwd)
 
     if not PASSWD:
-        print("error: no users found in passwd file", file=sys.stderr)
+        print("error: no users found in passwd file", file=sys.stderr)  # no-ctx-print
         sys.exit(1)
 
-    print(f"Loaded {len(PASSWD)} user(s) from {args.passwd}")
-    print(f"Vault: {args.fsimage}")
+    print(f"Loaded {len(PASSWD)} user(s) from {args.passwd}")  # no-ctx-print
+    print(f"Vault: {args.fsimage}")  # no-ctx-print
 
     import uvicorn
     uvicorn.run(app, host=args.host, port=args.port)

@@ -9,7 +9,7 @@ from prompt_toolkit.layout.controls import BufferControl
 async def edit_with_prompt_toolkit(initial_text=""):
     """Simple multi-line editor using prompt_toolkit."""
     
-    print("\033[2J\033[H", end="", flush=True)
+    print("\033[2J\033[H", end="", flush=True)  # no-ctx-print
 
     # Create a buffer for editing
     buffer = Buffer(multiline=True)

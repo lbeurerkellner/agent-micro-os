@@ -73,9 +73,16 @@ class DocsProvider(FolderProvider):
             return [f for f in files if f.startswith(prefix)]
         return files
 
+    def _safe_path(self, path: str) -> Path:
+        """Resolve path and verify it stays within _root (prevent traversal)."""
+        full = (self._root / path).resolve()
+        if not full.is_relative_to(self._root.resolve()):
+            raise FileNotFoundError(f"'{path}' not found in docs")
+        return full
+
     def read(self, path: str) -> bytes:
         path = path.strip("/")
-        full = self._root / path
+        full = self._safe_path(path)
         if not full.is_file():
             raise FileNotFoundError(f"'{path}' not found in docs")
         return full.read_bytes()
@@ -84,14 +91,21 @@ class DocsProvider(FolderProvider):
         path = path.strip("/")
         if not path:
             return True
-        full = self._root / path
+        try:
+            full = self._safe_path(path)
+        except FileNotFoundError:
+            return False
         return full.exists()
 
     def is_dir(self, path: str) -> bool:
         path = path.strip("/")
         if not path:
             return True
-        return (self._root / path).is_dir()
+        try:
+            full = self._safe_path(path)
+        except FileNotFoundError:
+            return False
+        return full.is_dir()
 
 
 class ModelProvider(FolderProvider):
