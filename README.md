@@ -9,6 +9,13 @@ To get started, launch a new shell session inside the virtual OS (everything is 
 uv run bin/ash.py --user bob --fsimage data.db
 ```
 
+Useful CLI flags:
+
+| Flag | Description |
+|------|-------------|
+| `--limit USD` | Maximum spend in USD per 24 h window (default: $1.00). Blocks program turns when exceeded. |
+| `--crond` | Start the cron daemon in the background (runs scheduled jobs from `/etc/crontab`). |
+
 Explore the filesystem:
 
 ```
@@ -113,4 +120,34 @@ Cron-style scheduling via `/etc/crontab`:
 ```
 */30 * * * * my_command arg1 arg2
 0 9 * * 1-5 daily_report
+```
+
+Start the cron daemon automatically by passing `--crond` to `ash`.
+
+## Web UI
+
+A read-only FastAPI web interface for browsing the vault from a browser:
+
+```
+uv run bin/web.py --fsimage data.db --passwd passwd.txt
+```
+
+The `passwd.txt` file contains one `user:bcrypt_hash` entry per line. The UI exposes:
+
+- **`/browse/`** — navigate the vault filesystem
+- **`/notes/`** — view Markdown files as rendered pages
+
+## Deployment
+
+A `docker-compose.yml` and `Makefile` are included for server deployment.
+
+```bash
+# Deploy to a remote host (requires DEPLOY_HOST and DEPLOY_PATH in .env)
+make deploy
+```
+
+The compose stack runs the web UI on port 8000 and is pre-configured for Traefik reverse-proxy with automatic TLS (`vault.<PRIMARY_DOMAIN>` via Let's Encrypt). Mount your `vault.db` and `passwd.txt` before starting:
+
+```bash
+docker compose up -d
 ```

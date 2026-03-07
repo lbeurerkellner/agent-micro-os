@@ -11,3 +11,4 @@ wheels/
 *.db
 passwd.txt
 .env
+.seaweed
