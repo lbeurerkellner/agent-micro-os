@@ -11,6 +11,8 @@ TOOLS = {}
 
 # bin/ directory (project root / bin)
 _BIN_DIR = Path(__file__).resolve().parent.parent / "bin"
+# docs/ directory (project root / docs)
+_DOCS_DIR = Path(__file__).resolve().parent.parent / "docs"
 
 # Base docstring for ash (without commands list)
 _ASH_BASE_DOC = """\
@@ -40,7 +42,7 @@ def _builtin_commands_summary() -> list[str]:
     return lines
 
 
-def _vault_commands_summary(fs) -> list[str]:
+def _vault_commands_summary(fs, access=None) -> list[str]:
     """List user-defined commands from vault bin/ directory."""
     builtin_names = {p.stem for p in _BIN_DIR.glob("*.py")} - {"__init__", "ash"}
     lines = []
@@ -48,6 +50,11 @@ def _vault_commands_summary(fs) -> list[str]:
         vault_bins = fs.list(prefix="bin")
     except Exception:
         return []
+    # Filter by access globs when set
+    if access:
+        from bin.sandbox import _glob_match
+        access_globs = [g for g, _ in access]
+        vault_bins = [f for f in vault_bins if _glob_match(f, access_globs)]
     for filepath in sorted(vault_bins):
         if not filepath.startswith("bin/"):
             continue
@@ -143,15 +150,83 @@ _SANDBOX_NOTE = (
 )
 
 
-def generate_agents_md(fs, sandbox_note=False) -> str:
+def _docs_summary() -> str:
+    """Build a Documentation section from docs/ files.
+
+    Each doc file should have a one-sentence description as its first
+    non-blank, non-heading line. That sentence is extracted and listed
+    alongside the /docs/<path> mount path.
+    """
+    if not _DOCS_DIR.exists():
+        return ""
+    entries = []
+    for doc_file in sorted(_DOCS_DIR.rglob("*")):
+        if not doc_file.is_file():
+            continue
+        rel = doc_file.relative_to(_DOCS_DIR)
+        mount_path = f"/docs/{rel}"
+        desc = doc_file.stem  # fallback
+        try:
+            for line in doc_file.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                # Use only the first sentence
+                dot = line.find(". ")
+                desc = line[: dot + 1] if dot != -1 else line
+                break
+        except Exception:
+            pass
+        entries.append(f"- `{mount_path}` - {desc}")
+    if not entries:
+        return ""
+    return "## Documentation\n\n" + "\n".join(entries) + "\n\n"
+
+
+def generate_agents_md(fs, sandbox_note=False, access=None) -> str:
     """Generate the dynamic AGENTS.md content from template + custom tools."""
-    vault_cmds = _vault_commands_summary(fs)
+    vault_cmds = _vault_commands_summary(fs, access=access)
     if vault_cmds:
         custom_tools = "## Custom Tools\n\n" + "\n".join(f"- {line}" for line in vault_cmds) + "\n"
     else:
         custom_tools = ""
+    
+    # Build access policy markdown if access rules are provided
+    access_control_note = ""
+
+     # Append access policy section if access rules are set
+    if access:
+        rw_entries = [g for g, m in access if m == "rw"]
+        ro_entries = [g for g, m in access if m == "ro"]
+        access_control_note += "\n\n## File Access Policy\n\n"
+        access_control_note += (
+            "Your changes will be committed atomically when your session ends. "
+            "If you write to, create, or delete any file outside the allowed read-write locations below, "
+            "**your entire transaction will be rejected and ALL changes will be lost**.\n\n"
+        )
+        if rw_entries:
+            access_control_note += "### Read-Write (you may read, execute, create, modify, and delete):\n"
+            for g in rw_entries:
+                access_control_note += f"- `{g}`\n"
+            access_control_note += "\n"
+        if ro_entries:
+            access_control_note += "### Read-Only (you may read/execute but NOT modify):\n"
+            for g in ro_entries:
+                access_control_note += f"- `{g}`\n"
+            access_control_note += "\n"
+
+        access_control_note
+    
     md = _AGENTS_TEMPLATE.replace("{{CUSTOM_TOOLS}}", custom_tools)
+    
+    md = md.replace("{{DOCS}}", _docs_summary())
     md = md.replace("{{SANDBOX_NOTE}}", _SANDBOX_NOTE if sandbox_note else "")
+    md = md.replace("{{COMMIT_NOTE}}", """## Commit When You Are Done
+
+When you have completed your modifications, write a concise commit message to `/workspace/COMMIT_MSG` describing the scope and reason for your changes. If there are follow-up changes, keep it updated.""" if sandbox_note else "")
+    
+    md = md.replace("{{ACCESS_CONTROL}}", access_control_note)
+    
     return md.strip()
 
 

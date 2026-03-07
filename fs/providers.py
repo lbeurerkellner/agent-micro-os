@@ -7,6 +7,8 @@ from fs.overlay import FolderProvider
 
 # bin/ directory relative to this file's parent (project root)
 _BIN_DIR = Path(__file__).resolve().parent.parent / "bin"
+# docs/ directory relative to this file's parent (project root)
+_DOCS_DIR = Path(__file__).resolve().parent.parent / "docs"
 
 
 class BinProvider(FolderProvider):
@@ -49,6 +51,48 @@ class BinProvider(FolderProvider):
         if not path:
             return True
         return False
+
+class DocsProvider(FolderProvider):
+    """Read-only provider that exposes the docs/ directory as files under a mount point."""
+
+    def __init__(self):
+        self._root = _DOCS_DIR
+
+    def _all_files(self) -> list[str]:
+        if not self._root.exists():
+            return []
+        return sorted(
+            str(p.relative_to(self._root))
+            for p in self._root.rglob("*")
+            if p.is_file()
+        )
+
+    def list(self, prefix: str = "") -> list[str]:
+        files = self._all_files()
+        if prefix:
+            return [f for f in files if f.startswith(prefix)]
+        return files
+
+    def read(self, path: str) -> bytes:
+        path = path.strip("/")
+        full = self._root / path
+        if not full.is_file():
+            raise FileNotFoundError(f"'{path}' not found in docs")
+        return full.read_bytes()
+
+    def exists(self, path: str) -> bool:
+        path = path.strip("/")
+        if not path:
+            return True
+        full = self._root / path
+        return full.exists()
+
+    def is_dir(self, path: str) -> bool:
+        path = path.strip("/")
+        if not path:
+            return True
+        return (self._root / path).is_dir()
+
 
 class ModelProvider(FolderProvider):
     """Read-only provider that exposes /models/ as a folder with available model providers.

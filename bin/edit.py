@@ -1,4 +1,3 @@
-import os
 from prompt_toolkit.application import Application
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout.containers import HSplit, Window
@@ -10,7 +9,7 @@ from prompt_toolkit.layout.controls import BufferControl
 async def edit_with_prompt_toolkit(initial_text=""):
     """Simple multi-line editor using prompt_toolkit."""
     
-    os.system('cls' if os.name == 'nt' else 'clear')
+    print("\033[2J\033[H", end="", flush=True)
 
     # Create a buffer for editing
     buffer = Buffer(multiline=True)

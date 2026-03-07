@@ -366,11 +366,12 @@ async def loop(user: str, fsimage: str, command: str = None, debug: bool = False
     """
     with SystemContext(user=user, fsimage=fsimage, debug=debug, interactive=True, cost_limit=cost_limit) as ctx:
         # Mount built-in commands as /sbin
-        from fs.providers import BinProvider, ModelProvider
+        from fs.providers import BinProvider, DocsProvider, ModelProvider
 
         # Mount standard folders
         SystemContext.current().mount("sbin", BinProvider())
         SystemContext.current().mount("models", ModelProvider())
+        SystemContext.current().mount("docs", DocsProvider())
 
         # Start cron daemon as a background task
         if crond:
@@ -409,8 +410,14 @@ async def loop(user: str, fsimage: str, command: str = None, debug: bool = False
             cprint(file=ctx.stderr)
 
         ev_loop = asyncio.get_running_loop()
-        stop = asyncio.Event()
-        ev_loop.add_signal_handler(signal.SIGINT, stop.set)
+
+        # Ctrl-C at the prompt: just print a note and redisplay (don't exit).
+        # We use a noop handler so SIGINT doesn't raise KeyboardInterrupt
+        # during the input() wait; Ctrl-D (EOFError) is the only way to exit.
+        def _sigint_noop():
+            cprint("\n(use Ctrl-D to exit)")
+
+        ev_loop.add_signal_handler(signal.SIGINT, _sigint_noop)
 
         try:
             while True:
@@ -419,29 +426,22 @@ async def loop(user: str, fsimage: str, command: str = None, debug: bool = False
                 text = f"({ctx.cwd}) > "
                 prompt = f"\001\033[1;32m\002{text}\001\033[0m\002"
 
-                input_task = asyncio.ensure_future(
-                    ev_loop.run_in_executor(None, input, prompt)
-                )
-                stop_task = asyncio.ensure_future(stop.wait())
-
-                done, pending = await asyncio.wait(
-                    {input_task, stop_task},
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                for p in pending:
-                    p.cancel()
-
-                if stop.is_set():
-                    cprint()
-                    break
-
                 try:
-                    user_input = input_task.result()
+                    user_input = await ev_loop.run_in_executor(None, input, prompt)
                 except EOFError:
                     cprint()
                     break
 
-                should_continue = await run_command(user_input)
+                # Restore default SIGINT during command execution so Ctrl-C
+                # raises KeyboardInterrupt and interrupts subprocesses.
+                ev_loop.remove_signal_handler(signal.SIGINT)
+                try:
+                    should_continue = await run_command(user_input)
+                except KeyboardInterrupt:
+                    cprint("^C")
+                    should_continue = True
+                finally:
+                    ev_loop.add_signal_handler(signal.SIGINT, _sigint_noop)
                 if not should_continue:
                     break
         finally:

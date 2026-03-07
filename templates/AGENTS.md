@@ -50,7 +50,10 @@ The host OS supports cron-style scheduling via `/etc/crontab`:
 - `/etc/model/max_turns` - Default max turns for programs
 - `/etc/model/reasoning_effort` - Reasoning effort level (`low`, `medium`, `high`)
 
+{{DOCS}}
 {{CUSTOM_TOOLS}}
+{{ACCESS_CONTROL}}
+
 ## Creating New Tools
 
 To create a new tool, write a file to `/bin/<name>` with a `#!/bin/tool` shebang. The description follows on the shebang line, and the body is a Python script that runs in a sandboxed environment with the full vault mounted at `/workspace`.
@@ -64,3 +67,5 @@ with open(f'/workspace/{sys.argv[1]}') as f:
 ```
 
 Arguments are passed via `sys.argv`. Output printed to stdout is returned to the caller.
+
+{{COMMIT_NOTE}}

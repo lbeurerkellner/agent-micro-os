@@ -12,7 +12,7 @@ _TOOL_SHEBANG_SETUP = (
 
 
 async def run(*args, env: dict = None, readonly=False, quiet=False, capture=False,
-              agents_md_name="AGENTS.md", tool_shebang=True):
+              agents_md_name="AGENTS.md", tool_shebang=True, access=None):
     """Launch a Docker container with vault contents mounted as a volume.
 
     Usage: sandbox [--image IMAGE] [--build DOCKERFILE] [--prefix PATH] [--no-version GLOB] [--cmd CMD] [path]
@@ -92,12 +92,18 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
         await _ensure_image(image, build_dockerfile, quiet=quiet)
 
     vault = Vault(ctx.fsimage, ctx.user)
+    fs = ctx.fs()
 
-    # Export
-    tar_buf, snapshot = _export_to_tar(vault, prefix, uid=uid, gid=uid)
+    # Export (use overlay FS so provider-mounted files like /docs are included)
+    tar_buf, snapshot = _export_to_tar(fs, prefix, uid=uid, gid=uid, access=access)
 
     # Inject dynamically generated etc/AGENTS.md into the export
-    _inject_agents_md(tar_buf, snapshot, ctx.fs(), uid=uid, gid=uid, filename=agents_md_name)
+    _inject_agents_md(tar_buf, snapshot, fs, uid=uid, gid=uid, filename=agents_md_name, access=access)
+
+    # Track snapshot entries that came from providers (not in the raw vault) so
+    # they are excluded from diff/commit — they are read-only by definition.
+    pfx = (prefix.strip("/") + "/") if prefix.strip("/") else ""
+    provider_files = {rel for rel in snapshot if not vault.exists(pfx + rel)}
 
     client = docker.from_env()
     vol_name = f"vault-{uuid.uuid4().hex[:12]}"
@@ -179,7 +185,9 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
                 return exit_code == 0
         _diff_and_commit(vault, snapshot, current, prefix, quiet=quiet,
                          no_version_globs=no_version_globs,
-                         ignore_globs=ignore_globs)
+                         ignore_globs=ignore_globs,
+                         access=access,
+                         provider_files=provider_files)
 
         if capture:
             return f"{output}\n[exit code: {exit_code}]"
@@ -189,7 +197,7 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
         vol.remove()
 
 
-def _export_to_tar(vault, prefix, uid=0, gid=0):
+def _export_to_tar(vault, prefix, uid=0, gid=0, access=None):
     import io
     import tarfile
 
@@ -201,6 +209,13 @@ def _export_to_tar(vault, prefix, uid=0, gid=0):
     else:
         pfx = ""
         files = all_files
+
+    # Filter files by access rules (only export files the agent is allowed to see)
+    if access:
+        access_globs = [g for g, _ in access]
+        files = [f for f in files if _glob_match(
+            f[len(pfx):] if pfx else f, access_globs
+        )]
 
     snapshot = {}
     buf = io.BytesIO()
@@ -235,14 +250,16 @@ def _export_to_tar(vault, prefix, uid=0, gid=0):
     return buf, snapshot
 
 
-def _inject_agents_md(tar_buf, snapshot, fs, uid=0, gid=0, filename="AGENTS.md"):
+def _inject_agents_md(tar_buf, snapshot, fs, uid=0, gid=0, filename="AGENTS.md", access=None):
     """Append a dynamically generated AGENTS.md to an existing tar buffer."""
     import io
     import tarfile
 
     from system.tools import generate_agents_md
 
-    content = generate_agents_md(fs, sandbox_note=True).encode("utf-8")
+    md = generate_agents_md(fs, sandbox_note=True, access=access)
+
+    content = md.encode("utf-8")
     rel_path = filename
 
     # Reopen the tar in append mode
@@ -255,7 +272,17 @@ def _inject_agents_md(tar_buf, snapshot, fs, uid=0, gid=0, filename="AGENTS.md")
         info.gid = gid
         tar.addfile(info, io.BytesIO(content))
 
+        # Inject empty COMMIT_MSG file
+        commit_msg = b""
+        cm_info = tarfile.TarInfo(name="COMMIT_MSG")
+        cm_info.size = len(commit_msg)
+        cm_info.mode = 0o600
+        cm_info.uid = uid
+        cm_info.gid = gid
+        tar.addfile(cm_info, io.BytesIO(commit_msg))
+
     snapshot[rel_path] = content
+    snapshot["COMMIT_MSG"] = commit_msg
     tar_buf.seek(0)
 
 
@@ -307,10 +334,13 @@ def _glob_match(fp, globs):
 
 
 def _diff_and_commit(vault, snapshot, current, prefix, quiet=False,
-                     no_version_globs=(), ignore_globs=()):
+                     no_version_globs=(), ignore_globs=(), access=None,
+                     provider_files=None):
+    provider_files = provider_files or set()
     added = set(current) - set(snapshot)
-    removed = set(snapshot) - set(current)
-    modified = {k for k in current if k in snapshot and current[k] != snapshot[k]}
+    removed = (set(snapshot) - set(current)) - provider_files
+    modified = {k for k in current if k in snapshot and current[k] != snapshot[k]
+                and k not in provider_files}
 
     vault_prefix = (prefix.strip("/") + "/") if prefix else ""
 
@@ -330,10 +360,28 @@ def _diff_and_commit(vault, snapshot, current, prefix, quiet=False,
         removed = {fp for fp in removed if not _glob_match(fp, ignore_globs)}
         modified = {fp for fp in modified if not _glob_match(fp, ignore_globs)}
 
+    # Always ignore COMMIT_MSG from versioned changes
+    for s in (added, removed, modified):
+        s.discard("COMMIT_MSG")
+
     if not added and not removed and not modified:
         if not quiet:
             cprint(f"{_DIM}No changes.{_RST}")
         return
+
+    # Access control: validate all changes are within rw globs
+    if access:
+        rw_globs = [g for g, m in access if m == "rw"]
+        violations = []
+        for fp in added | modified | removed:
+            if not _glob_match(fp, rw_globs):
+                violations.append(fp)
+        if violations:
+            cprint(f"{_DIM}ACCESS VIOLATION: the following files are outside read-write access:")
+            for fp in sorted(violations):
+                cprint(f"  ! {fp}")
+            cprint(f"Transaction rejected — all {len(added) + len(modified) + len(removed)} changes discarded.{_RST}")
+            return
 
     if not quiet:
         cprint(f"{_DIM}{len(added)} added, {len(modified)} modified, {len(removed)} removed")
@@ -346,12 +394,19 @@ def _diff_and_commit(vault, snapshot, current, prefix, quiet=False,
             cprint(f"  - {fp}")
         cprint(_RST, end="")
 
+    # Use COMMIT_MSG from the agent if provided
+    commit_msg_content = current.get("COMMIT_MSG", b"").strip()
+    if isinstance(commit_msg_content, bytes):
+        commit_msg_content = commit_msg_content.decode("utf-8", errors="replace").strip()
+    if not commit_msg_content:
+        commit_msg_content = f"sandbox: +{len(added)} ~{len(modified)} -{len(removed)}"
+
     vault.begin_commit()
     for fp in added | modified:
         vault.write(vault_prefix + fp, current[fp])
     for fp in removed:
         vault.delete(vault_prefix + fp)
-    vault.end_commit(f"sandbox: +{len(added)} ~{len(modified)} -{len(removed)}")
+    vault.end_commit(commit_msg_content)
 
     if not quiet:
         cprint(f"{_DIM}Committed.{_RST}")

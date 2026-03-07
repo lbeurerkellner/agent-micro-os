@@ -144,10 +144,11 @@ async def crond_loop(users: list[str] | None, fsimage: str):
 
         for user in active_users:
             with SystemContext(user=user, fsimage=fsimage, interactive=False) as ctx:
-                from fs.providers import BinProvider
+                from fs.providers import BinProvider, DocsProvider
 
                 SystemContext.current().mount("sbin", BinProvider())
                 SystemContext.current().mount("models", ModelProvider())
+                SystemContext.current().mount("docs", DocsProvider())
 
                 vault = ctx.fs()
                 jobs = collect_jobs(vault)

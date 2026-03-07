@@ -19,7 +19,7 @@ Usage: claude PROMPT
 """
 
 
-async def run(*args, env: dict = None, readonly=False, quiet=False):
+async def run(*args, env: dict = None, readonly=False, quiet=False, access=None):
     """Run the claude CLI in a Docker container.
 
     Usage: claude [--prefix PATH] [claude-args...]
@@ -99,7 +99,8 @@ async def run(*args, env: dict = None, readonly=False, quiet=False):
             quiet=quiet,
             capture=tool_use_mode,  # Capture output for tool use mode
             agents_md_name="CLAUDE.md",
-            tool_shebang=False  # claude image has it built-in
+            tool_shebang=False,  # claude image has it built-in
+            access=access,
         )
     finally:
         ctx.unregister_agent(call_id)

@@ -1,23 +1,14 @@
-import subprocess
-import tempfile
-import os
+from pathlib import Path
 
-def edit_with_vim(initial_text=""):
-    with tempfile.NamedTemporaryFile(mode='w+', suffix='.txt', delete=False) as tf:
-        tf.write(initial_text)
-        tf.flush()
-        temp_path = tf.name
-    
-    subprocess.call(['vim', temp_path])
-    
-    with open(temp_path, 'r') as f:
-        result = f.read()
-    
-    os.unlink(temp_path)
-    return result
+_IMAGE = "vim-sandbox:latest"
+_DOCKERFILE = Path(__file__).parent.parent / "sandboxes" / "Dockerfile.vim"
+
 
 async def run(*args):
-    """Edit a file using vim."""
+    """Edit a file using vim inside a sandboxed Docker container.
+
+    Usage: vim <file>
+    """
     from system.context import SystemContext, cprint
     from fs.utils import resolve_path
 
@@ -40,31 +31,39 @@ async def run(*args):
     # Resolve the path to vault format
     _, vault_path = resolve_path(filepath, ctx.cwd)
 
-    # Check if file exists and read content
-    initial_content = ""
+    # Check if it's a directory
+    if vault.exists(vault_path) and vault.is_dir(vault_path):
+        cprint(f"vim: {filepath}: Is a directory")
+        return
+
+    # If file exists, check it's not binary
     if vault.exists(vault_path):
-        # Check if it's a directory
-        if vault.is_dir(vault_path):
-            cprint(f"vim: {filepath}: Is a directory")
-            return
-
-        # Read existing file content
         try:
-            content_bytes = vault.read(vault_path)
-            try:
-                initial_content = content_bytes.decode('utf-8')
-            except UnicodeDecodeError:
-                cprint(f"vim: {filepath}: Cannot edit binary file")
-                return
-        except Exception as e:
-            cprint(f"vim: {filepath}: Error reading file: {e}")
+            vault.read(vault_path).decode('utf-8')
+        except UnicodeDecodeError:
+            cprint(f"vim: {filepath}: Cannot edit binary file")
             return
 
-    # Edit with vim
-    try:
-        edited_content = edit_with_vim(initial_content)
+    # Ensure the file exists in the vault (vim expects to open it)
+    if not vault.exists(vault_path):
+        vault.write(vault_path, b"")
 
-        # Write back to vault
-        vault.write(vault_path, edited_content.encode('utf-8'))
-    except Exception as e:
-        cprint(f"vim: {filepath}: Error: {e}")
+    # Determine prefix and relative filename for the sandbox
+    if '/' in vault_path:
+        prefix = vault_path.rsplit('/', 1)[0]
+        rel_name = vault_path.rsplit('/', 1)[1]
+    else:
+        prefix = ""
+        rel_name = vault_path
+
+    from bin.sandbox import run as sandbox_run
+
+    sandbox_args = [
+        "--image", _IMAGE,
+        "--build", str(_DOCKERFILE),
+    ]
+    if prefix:
+        sandbox_args.extend(["--prefix", prefix])
+    sandbox_args.extend(["--cmd", f"vim {rel_name}"])
+
+    await sandbox_run(*sandbox_args)

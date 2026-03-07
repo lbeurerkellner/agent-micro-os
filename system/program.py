@@ -41,6 +41,11 @@ class Program:
     # budget in USD (limits total spend for this program run)
     budget: float | None = None
 
+    # access control: list of (glob, "rw"|"ro") or None (unrestricted)
+    # Parsed from .ACCESS directives. May contain "$@" as a glob token
+    # which is expanded at run time via resolve_access().
+    access: list[tuple[str, str]] | None = None
+
 def parse(contents: str):
     """
     A program looks like this
@@ -61,6 +66,8 @@ def parse(contents: str):
     engine = "native"
     engine_flags = None
     budget = None
+
+    access = None
 
     max_turns = safe_int(SystemContext.current().read("/etc/model/max_turns", "10"), default=10)
 
@@ -99,6 +106,19 @@ def parse(contents: str):
                 import shlex
                 engine_flags = shlex.split(parts[1])
             continue
+        elif line.startswith(".ACCESS"):
+            raw = line[len(".ACCESS"):].strip()
+            if raw.endswith(":ro"):
+                glob_pattern = raw[:-3].strip()
+                mode = "ro"
+            else:
+                glob_pattern = raw
+                mode = "rw"
+            if glob_pattern:
+                if access is None:
+                    access = []
+                access.append((glob_pattern, mode))
+            continue
         elif line.startswith(".BUDGET"):
             try:
                 budget = float(line[len(".BUDGET"):].strip())
@@ -123,7 +143,34 @@ def parse(contents: str):
     tool_paths = ["/tools/ash"]
 
     prompt = "\n".join(prompt_lines).strip()
-    return Program(tools=tools, tool_paths=tool_paths, system_prompt=system_prompt, prompt=prompt, max_turns=max_turns or 10, is_interactive=is_interactive, engine=engine, engine_flags=engine_flags, budget=budget)
+    return Program(tools=tools, tool_paths=tool_paths, system_prompt=system_prompt, prompt=prompt, max_turns=max_turns or 10, is_interactive=is_interactive, engine=engine, engine_flags=engine_flags, budget=budget, access=access)
+
+def resolve_access(access: list[tuple[str, str]] | None, args: tuple, vault) -> list[tuple[str, str]] | None:
+    """Expand $@ tokens in access rules to actual vault paths from args.
+
+    Each arg that resolves to an existing vault path (file or directory)
+    replaces the $@ entry. Non-path args are silently skipped.
+    """
+    if access is None:
+        return None
+
+    from fs.utils import resolve_path
+    ctx = SystemContext.current()
+    cwd = ctx.cwd if ctx else "/"
+
+    resolved = []
+    for glob_pattern, mode in access:
+        if glob_pattern == "$@":
+            for arg in args:
+                if arg.startswith("-"):
+                    continue
+                _, vault_path = resolve_path(arg, cwd)
+                if vault.exists(vault_path) or vault.is_dir(vault_path):
+                    resolved.append((vault_path, mode))
+        else:
+            resolved.append((glob_pattern, mode))
+    return resolved if resolved else None
+
 
 def safe_int(value: str, default: int = 0) -> int:
     try:
@@ -170,7 +217,23 @@ async def run_claude(context: SystemContext, program: Program, filepath: str, *a
     if program.engine_flags:
         claude_args.extend(program.engine_flags)
 
-    await claude_run(*claude_args)
+    # Resolve access rules (expand $@ with actual args)
+    access = resolve_access(program.access, args, context.fs())
+
+    # Ensure Claude credential/config files are always accessible in the
+    # container, even when .ACCESS restricts the exported file set.
+    if access is not None:
+        _CLAUDE_INFRA_GLOBS = [
+            "agent/.claude/.claude.json",
+            "agent/.claude/.credentials.json",
+            "agent/.claude/settings.json",
+        ]
+        existing_globs = {g for g, _ in access}
+        for g in _CLAUDE_INFRA_GLOBS:
+            if g not in existing_globs:
+                access.append((g, "rw"))
+
+    await claude_run(*claude_args, access=access)
 
 
 async def run_native(context: SystemContext, program: Program, filepath: str, *args):
