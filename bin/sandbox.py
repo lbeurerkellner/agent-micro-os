@@ -351,6 +351,93 @@ def _diff_and_commit(vault, snapshot, current, prefix, quiet=False,
         cprint(f"{_DIM}Committed.{_RST}")
 
 
+def _tool_image_tag(pip_deps: list, npm_deps: list, base_image: str = "python:3.12") -> str:
+    """Return a deterministic Docker image tag for the given dependency set.
+
+    The tag is derived from a hash of the base image and sorted dependency
+    lists so the same inputs always produce the same tag (enabling reuse).
+    """
+    import hashlib
+
+    key = f"{base_image}|pip:{','.join(sorted(pip_deps))}|npm:{','.join(sorted(npm_deps))}"
+    h = hashlib.sha256(key.encode()).hexdigest()[:12]
+    return f"agentvault-tool-{h}"
+
+
+async def _ensure_tool_image(pip_deps: list, npm_deps: list,
+                              base_image: str = "python:3.12",
+                              quiet: bool = False) -> str:
+    """Return a Docker image tag that has the requested deps pre-installed.
+
+    If *pip_deps* and *npm_deps* are both empty the *base_image* is returned
+    unchanged — no extra image is built.
+
+    Otherwise the function derives a deterministic tag from the dependency set,
+    checks whether that image already exists locally, and only builds it when
+    it is missing.  Subsequent calls with the same deps reuse the cached image
+    without any Docker build overhead.
+
+    Args:
+        pip_deps: Python packages to install via ``pip install``.
+        npm_deps: Node packages to install globally via ``npm install -g``.
+        base_image: Base Docker image (default ``python:3.12``).
+        quiet: Suppress progress messages when True.
+
+    Returns:
+        The Docker image tag to pass to ``sandbox.run(--image ...)``.
+    """
+    import asyncio
+    import os
+    import tempfile
+
+    import docker
+
+    if not pip_deps and not npm_deps:
+        return base_image
+
+    tag = _tool_image_tag(pip_deps, npm_deps, base_image)
+
+    # Return immediately if the image is already cached locally
+    client = docker.from_env()
+    try:
+        client.images.get(tag)
+        return tag
+    except docker.errors.ImageNotFound:
+        pass
+
+    # Build a minimal Dockerfile that extends the base image
+    lines = [f"FROM {base_image}"]
+    if pip_deps:
+        pkgs = " ".join(pip_deps)
+        lines.append(f"RUN pip install --no-cache-dir {pkgs}")
+    if npm_deps:
+        pkgs = " ".join(npm_deps)
+        lines.append(
+            "RUN apt-get update -qq && apt-get install -y -qq nodejs npm"
+            f" && npm install -g {pkgs}"
+        )
+    dockerfile_content = "\n".join(lines) + "\n"
+
+    if not quiet:
+        cprint(f"{_DIM}Building tool image {tag} ...{_RST}")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        dockerfile_path = os.path.join(tmpdir, "Dockerfile")
+        with open(dockerfile_path, "w") as f:
+            f.write(dockerfile_content)
+
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "build", "-t", tag, "-f", dockerfile_path, tmpdir,
+        )
+        if await proc.wait() != 0:
+            raise RuntimeError(f"sandbox: failed to build tool image {tag}")
+
+    if not quiet:
+        cprint(f"{_DIM}Tool image {tag} ready.{_RST}")
+
+    return tag
+
+
 async def _ensure_image(image, dockerfile, quiet=False):
     """Build *image* from *dockerfile* if it is not already present in Docker."""
     import asyncio

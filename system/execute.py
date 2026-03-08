@@ -73,6 +73,30 @@ async def execute(ctx, filepath, *args):
         return
 
 
+def _parse_tool_deps(script_body: str) -> tuple:
+    """Parse # pip: and # npm: dependency declarations from a tool script header.
+
+    Scans comment lines (and blank lines) at the top of the script.
+    Stops at the first non-comment, non-blank line.
+
+    Returns:
+        (pip_deps, npm_deps) — lists of package specifiers.
+    """
+    pip_deps = []
+    npm_deps = []
+    for line in script_body.splitlines():
+        stripped = line.strip()
+        if stripped == "":
+            continue  # blank lines are fine in the header
+        if not stripped.startswith("#"):
+            break  # hit real code — stop scanning
+        if stripped.startswith("# pip:"):
+            pip_deps.extend(stripped[len("# pip:"):].split())
+        elif stripped.startswith("# npm:"):
+            npm_deps.extend(stripped[len("# npm:"):].split())
+    return pip_deps, npm_deps
+
+
 async def _run_tool_script(ctx, filepath, script_body, *args):
     """Run a #!/bin/tool script in a sandboxed Python environment."""
     import uuid
@@ -84,12 +108,14 @@ async def _run_tool_script(ctx, filepath, script_body, *args):
     fs.write(temp_file, script_body.strip().encode("utf-8"))
 
     try:
-        from bin.sandbox import run as sandbox_run
+        from bin.sandbox import run as sandbox_run, _ensure_tool_image
+        pip_deps, npm_deps = _parse_tool_deps(script_body)
+        image = await _ensure_tool_image(pip_deps, npm_deps, quiet=True)
         cmd = f"python /workspace/{temp_file}"
         if args:
             cmd += " " + " ".join(shlex.quote(a) for a in args)
         result = await sandbox_run(
-            "--image", "python:3.12", "--cmd", cmd,
+            "--image", image, "--cmd", cmd,
             readonly=False, quiet=True, capture=True,
         )
         if result:
