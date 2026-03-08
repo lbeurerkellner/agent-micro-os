@@ -181,11 +181,12 @@ class OverlayFS:
             return provider.is_dir(rel_path)
         return self._vault.is_dir(path)
 
-    def write(self, filepath: str, content: bytes, author: Optional[str] = None, mode: Optional[str] = None):
+    def write(self, filepath: str, content: bytes, author: Optional[str] = None,
+              mode: Optional[str] = None, parents: bool = True):
         filepath_clean = filepath.strip("/")
         if self._is_mount_point(filepath_clean) or self._find_mount(filepath_clean):
             raise PermissionError(f"Cannot write to read-only mount: {filepath}")
-        self._vault.write(filepath, content, author=author, mode=mode)
+        self._vault.write(filepath, content, author=author, mode=mode, parents=parents)
 
     def delete(self, filepath: str):
         filepath_clean = filepath.strip("/")
@@ -229,6 +230,24 @@ class OverlayFS:
         if self._is_mount_point(dst_clean) or self._find_mount(dst_clean):
             raise PermissionError(f"Cannot write to read-only mount: {dst}")
         self._vault.move(src, dst)
+
+    def mkdir(self, path: str, author: Optional[str] = None):
+        path_clean = path.strip("/")
+        if self._is_mount_point(path_clean) or self._find_mount(path_clean):
+            raise PermissionError(f"Cannot create directory in read-only mount: {path}")
+        self._vault.mkdir(path, author=author)
+
+    def rmdir(self, path: str):
+        path_clean = path.strip("/")
+        if self._is_mount_point(path_clean) or self._find_mount(path_clean):
+            raise PermissionError(f"Cannot remove directory from read-only mount: {path}")
+        self._vault.rmdir(path)
+
+    def _has_dir_marker(self, path: str) -> bool:
+        return self._vault._has_dir_marker(path)
+
+    def _list_dir_markers(self, prefix: str) -> list[str]:
+        return self._vault._list_dir_markers(prefix)
 
     def log(self, filepath: str):
         return self._vault.log(filepath)

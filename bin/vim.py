@@ -36,6 +36,13 @@ async def run(*args):
         cprint(f"vim: {filepath}: Is a directory")
         return
 
+    # Check parent directory exists before proceeding
+    if '/' in vault_path:
+        parent = vault_path.rsplit('/', 1)[0]
+        if not vault.is_dir(parent):
+            cprint(f"vim: {filepath}: No such file or directory")
+            return
+
     # If file exists, check it's not binary
     if vault.exists(vault_path):
         try:
@@ -43,10 +50,6 @@ async def run(*args):
         except UnicodeDecodeError:
             cprint(f"vim: {filepath}: Cannot edit binary file")
             return
-
-    # Ensure the file exists in the vault (vim expects to open it)
-    if not vault.exists(vault_path):
-        vault.write(vault_path, b"")
 
     # Determine prefix and relative filename for the sandbox
     if '/' in vault_path:

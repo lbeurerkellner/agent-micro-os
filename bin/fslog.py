@@ -24,13 +24,12 @@ async def run(*args):
         cprint(f"log: {filepath}: No such file or directory")
         return
 
-    # Check if it's a directory
-    if vault.is_dir(vault_path):
-        cprint(f"log: {filepath}: Is a directory")
-        return
-
     try:
         if version_id:
+            # Directories don't have viewable revisions
+            if vault.is_dir(vault_path):
+                cprint(f"log: {filepath}: Is a directory")
+                return
             # Show content of a specific revision
             content = vault.read_version(vault_path, version_id)
             if isinstance(content, bytes):
@@ -38,7 +37,7 @@ async def run(*args):
             else:
                 cprint(content)
         else:
-            # Show version log
+            # Show version log (works for both files and directories)
             cprint(vault_path)
             for version in vault.log(vault_path):
                 cprint(version.version_id, version.author, version.timestamp)

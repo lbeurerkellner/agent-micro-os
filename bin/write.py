@@ -45,8 +45,15 @@ async def run(*args):
 
     _, vault_path = resolve_path(filepath, ctx.cwd)
 
+    # Check parent directory exists
+    if '/' in vault_path:
+        parent = vault_path.rsplit('/', 1)[0]
+        if not ctx.fs().is_dir(parent):
+            cprint(f"write: {filepath}: No such file or directory")
+            return
+
     try:
-        ctx.fs().write(vault_path, content.encode('utf-8'))
+        ctx.fs().write(vault_path, content.encode('utf-8'), parents=False)
         cprint(f"Wrote to {filepath}")
     except Exception as e:
         cprint(f"write: {filepath}: {e}")

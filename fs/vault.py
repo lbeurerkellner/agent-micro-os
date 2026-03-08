@@ -131,7 +131,18 @@ class Vault:
         conn.commit()
         conn.close()
 
-    def write(self, filepath: str, content: bytes, author: Optional[str] = None, mode: Optional[str] = None):
+    def _ensure_parents(self, filepath: str, author: str):
+        """Create directory markers for all parent directories of *filepath*."""
+        parts = filepath.split("/")
+        if len(parts) <= 1:
+            return  # No parent directories
+        for i in range(1, len(parts)):
+            parent = "/".join(parts[:i])
+            if not self._has_dir_marker(parent):
+                self.mkdir(parent, author=author)
+
+    def write(self, filepath: str, content: bytes, author: Optional[str] = None,
+              mode: Optional[str] = None, parents: bool = True):
         """Write a file to the vault.
 
         Creates a new version of the file each time it's called.
@@ -141,7 +152,10 @@ class Vault:
         :param author: The author of this version (defaults to the vault's user)
         :param mode: If "a", append content to the existing version in-place (no new version).
                      If "replace", overwrite the existing version in-place (no new version).
+        :param parents: If True (default), auto-create parent directory markers.
+                       If False, raise FileNotFoundError when parent directories don't exist.
         :raises ValueError: If filepath is empty
+        :raises FileNotFoundError: If parents=False and a parent directory doesn't exist
         """
         # Normalize filepath: strip leading/trailing slashes
         filepath = filepath.strip('/')
@@ -153,6 +167,19 @@ class Vault:
         # Use vault's user as default author
         if author is None:
             author = self.user
+
+        # Handle parent directories
+        parts = filepath.split("/")
+        if len(parts) > 1:
+            if parents:
+                self._ensure_parents(filepath, author)
+            else:
+                # Check that immediate parent exists as a directory
+                parent = "/".join(parts[:-1])
+                if not self.is_dir(parent):
+                    raise FileNotFoundError(
+                        f"No such file or directory: '{parent}'"
+                    )
 
         # In-place modes (no new version row): "a" appends, "replace" overwrites
         if mode in ("a", "replace") and self._current_commit_id is None:
@@ -221,10 +248,143 @@ class Vault:
         conn.commit()
         conn.close()
 
+    def _has_dir_marker(self, path: str) -> bool:
+        """Check if an explicit directory marker exists for *path*."""
+        conn = sqlite3.connect(self.filename)
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT 1 FROM versions
+               WHERE user = ? AND filepath = ? AND hash = 'directory'
+               ORDER BY id DESC LIMIT 1""",
+            (self.user, path),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return row is not None
+
+    def _list_dir_markers(self, prefix: str) -> list[str]:
+        """Return all explicit directory markers at or under *prefix*, deepest first."""
+        prefix = prefix.strip("/")
+        conn = sqlite3.connect(self.filename)
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT DISTINCT filepath FROM versions
+               WHERE user = ? AND hash = 'directory'
+               AND (filepath = ? OR filepath LIKE ?)""",
+            (self.user, prefix, prefix + "/%"),
+        )
+        dirs = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        dirs.sort(key=lambda d: d.count("/"), reverse=True)
+        return dirs
+
+    def mkdir(self, path: str, author: Optional[str] = None):
+        """Create an explicit directory.
+
+        Parent directories are created automatically (like ``mkdir -p``).
+        Calling mkdir on an existing directory is a no-op.
+
+        :param path: Directory path to create
+        :param author: Author of this operation (defaults to vault user)
+        :raises ValueError: If path is empty or a file already exists at path
+        """
+        path = path.strip("/")
+        if not path:
+            raise ValueError("Directory path cannot be empty")
+
+        if author is None:
+            author = self.user
+
+        # Reject if a file exists at this exact path
+        files = self.list()
+        if path in files:
+            raise ValueError(f"'{path}' exists as a file")
+
+        # Collect all paths to create (path + parents)
+        parts = path.split("/")
+        paths_to_create = []
+        for i in range(1, len(parts) + 1):
+            paths_to_create.append("/".join(parts[:i]))
+
+        conn = sqlite3.connect(self.filename)
+        cursor = conn.cursor()
+
+        for dir_path in paths_to_create:
+            # Skip if marker already exists
+            cursor.execute(
+                """SELECT 1 FROM versions
+                   WHERE user = ? AND filepath = ? AND hash = 'directory'
+                   ORDER BY id DESC LIMIT 1""",
+                (self.user, dir_path),
+            )
+            if cursor.fetchone() is not None:
+                continue
+
+            # Also reject if a file exists at a parent path
+            if dir_path != path and dir_path in files:
+                conn.close()
+                raise ValueError(f"'{dir_path}' exists as a file")
+
+            version_id = str(uuid.uuid4()).lower()
+            cursor.execute(
+                "INSERT INTO versions (version_id, user, filepath, content, hash, author) VALUES (?, ?, ?, ?, ?, ?)",
+                (version_id, self.user, dir_path, b"", "directory", author),
+            )
+
+        conn.commit()
+        conn.close()
+
+    def rmdir(self, path: str):
+        """Remove an explicit directory marker.
+
+        Only works on directories created with :meth:`mkdir`.
+        The directory must be empty (no files or child directories).
+
+        :param path: Directory path to remove
+        :raises FileNotFoundError: If no explicit directory marker exists
+        :raises ValueError: If the directory is not empty
+        """
+        path = path.strip("/")
+
+        if not self._has_dir_marker(path):
+            raise FileNotFoundError(f"Directory '{path}' not found")
+
+        # Check for files under this directory
+        files = self.list()
+        prefix = path + "/"
+        for f in files:
+            if f.startswith(prefix):
+                raise ValueError(f"Directory '{path}' is not empty")
+
+        # Check for child directory markers
+        conn = sqlite3.connect(self.filename)
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT 1 FROM versions
+               WHERE user = ? AND filepath LIKE ? AND hash = 'directory'
+               AND filepath != ?
+               LIMIT 1""",
+            (self.user, path + "/%", path),
+        )
+        has_children = cursor.fetchone() is not None
+
+        if has_children:
+            conn.close()
+            raise ValueError(f"Directory '{path}' is not empty")
+
+        # Delete the marker
+        cursor.execute(
+            "DELETE FROM versions WHERE user = ? AND filepath = ? AND hash = 'directory'",
+            (self.user, path),
+        )
+        conn.commit()
+        conn.close()
+
     def exists(self, path: str) -> bool:
         """Check if a file or directory exists in the vault.
 
-        Directories are virtual - they exist if there are files under them.
+        Returns True for files, virtual directories (with files under them),
+        and explicit directories created with :meth:`mkdir`.
 
         :param path: The path to check (e.g., 'docs', 'docs/reports', 'docs/file.txt')
         :return: True if the path exists (as a file or directory), False otherwise
@@ -248,10 +408,14 @@ class Vault:
             if filepath.startswith(prefix):
                 return True
 
-        return False
+        # Check for explicit directory marker
+        return self._has_dir_marker(path)
 
     def is_dir(self, path: str) -> bool:
-        """Check if a path is a directory (virtual directory with files under it).
+        """Check if a path is a directory.
+
+        Returns True for virtual directories (with files under them)
+        and explicit directories created with :meth:`mkdir`.
 
         :param path: The path to check
         :return: True if the path is a directory, False if it's a file or doesn't exist
@@ -275,7 +439,8 @@ class Vault:
             if filepath.startswith(prefix):
                 return True
 
-        return False
+        # Check for explicit directory marker
+        return self._has_dir_marker(path)
 
     def list(self, sort_by_recent: bool = False, prefix: str = "") -> list[str]:
         """List files in the vault for the current user.
@@ -298,7 +463,7 @@ class Vault:
         order = "ORDER BY id DESC" if sort_by_recent else ""
         cursor.execute(
             f"""SELECT filepath FROM versions v1
-               WHERE user = ? AND hash != 'tombstone'{prefix_clause}
+               WHERE user = ? AND hash NOT IN ('tombstone', 'directory'){prefix_clause}
                AND id = (SELECT MAX(id) FROM versions v2
                         WHERE v2.user = v1.user AND v2.filepath = v1.filepath)
                {order}""",
@@ -350,7 +515,7 @@ class Vault:
         cursor.execute(
             f"""SELECT filepath, timestamp, author, LENGTH(content)
                 FROM versions v1
-                WHERE user = ? AND hash != 'tombstone'{prefix_clause}
+                WHERE user = ? AND hash NOT IN ('tombstone', 'directory'){prefix_clause}
                 AND id = (SELECT MAX(id) FROM versions v2
                          WHERE v2.user = v1.user AND v2.filepath = v1.filepath)
                 {order}""",
@@ -606,9 +771,14 @@ class Vault:
         Also deletes all versions of the file (garbage collection).
 
         :param filepath: The path of the file to delete (leading/trailing slashes are stripped)
+        :raises ValueError: If filepath is a non-empty directory
         """
         # Normalize filepath: strip leading/trailing slashes
         filepath = filepath.strip('/')
+
+        # Prevent deleting directories that have content
+        if self.is_dir(filepath):
+            raise ValueError(f"Directory '{filepath}' is not empty")
 
         # If in a commit, batch the deletion
         if self._current_commit_id is not None:

@@ -70,16 +70,19 @@ async def run(*args):
                 prefix = vault_path + '/'
                 files_in_dir = [f for f in all_files if f.startswith(prefix) or f == vault_path]
 
-                if not files_in_dir:
-                    # Empty directory (virtual), nothing to do
-                    continue
-
                 # Delete all files in the directory
                 for file in files_in_dir:
                     try:
                         vault.delete(file)
                     except Exception as e:
                         cprint(f"rm: cannot remove '{file}': {e}")
+
+                # Remove explicit directory markers (deepest first)
+                for d in vault._list_dir_markers(vault_path):
+                    try:
+                        vault.rmdir(d)
+                    except (ValueError, FileNotFoundError):
+                        pass  # dir still has siblings or already gone
             else:
                 # It's a file, delete it
                 try:

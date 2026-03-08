@@ -73,6 +73,13 @@ async def run(*args):
 
     _, vault_path = resolve_path(filepath, ctx.cwd)
 
+    # Check parent directory exists before proceeding
+    if '/' in vault_path:
+        parent = vault_path.rsplit('/', 1)[0]
+        if not vault.is_dir(parent):
+            cprint(f"edit: {filepath}: No such file or directory")
+            return
+
     initial_content = ""
     if vault.exists(vault_path):
         if vault.is_dir(vault_path):
@@ -93,7 +100,7 @@ async def run(*args):
     try:
         edited_content = await edit_with_prompt_toolkit(initial_content)
         if edited_content != initial_content:
-            vault.write(vault_path, edited_content.encode('utf-8'))
+            vault.write(vault_path, edited_content.encode('utf-8'), parents=False)
             cprint(f"Saved {filepath}")
         else:
             cprint(f"No changes made to {filepath}")
