@@ -33,10 +33,6 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
         env: Optional dict of environment variables to pass to the container.
         readonly: If True, do not commit changes back to the vault.
     """
-    import uuid
-
-    import docker
-
     from system.context import SystemContext, cprint
     from fs.vault import Vault
 
@@ -97,35 +93,25 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
     import time as _time
 
     # Export (use overlay FS so provider-mounted files like /docs are included)
-    t0 = _time.monotonic()
-    tar_buf, snapshot = _export_to_tar(fs, prefix, uid=uid, gid=uid, access=access)
-
-    # Inject dynamically generated etc/AGENTS.md into the export
-    _inject_agents_md(tar_buf, snapshot, fs, uid=uid, gid=uid, filename=agents_md_name, access=access)
-    if not quiet:
-        cprint(f"{_DIM}export: {len(snapshot)} files, {_time.monotonic() - t0:.2f}s{_RST}")
-
+    snapshot = _build_snapshot(fs, prefix, access=access,
+                               agents_md_name=agents_md_name)
     # Track snapshot entries that came from providers (not in the raw vault) so
     # they are excluded from diff/commit — they are read-only by definition.
     pfx = (prefix.strip("/") + "/") if prefix.strip("/") else ""
-    provider_files = {rel for rel in snapshot if not vault.exists(pfx + rel)}
+    vault_files = set(vault.list())
+    provider_files = {rel for rel in snapshot if (pfx + rel) not in vault_files}
 
-    client = docker.from_env()
+    import os
+    import tempfile
 
-    # Build a temporary image with vault contents baked in as a layer.
-    # This lets us use container.diff() after the run to detect only
-    # the files the agent actually changed, instead of reading back
-    # the entire workspace.
-    t1 = _time.monotonic()
-    vault_image = _build_vault_image(client, image, tar_buf, mount,
-                                     uid=uid, gid=uid)
-    if not quiet:
-        cprint(f"{_DIM}build: {_time.monotonic() - t1:.2f}s{_RST}")
-    container_name = f"vault-{uuid.uuid4().hex[:12]}"
+    # Write vault files to a temp dir and bind-mount it into the container.
+    # This avoids building a Docker image entirely — the diff is done via
+    # fast local I/O after the container exits.
+    tmpdir = tempfile.mkdtemp(prefix="vault-")
+    _export_to_dir(snapshot, tmpdir, uid=uid, gid=uid)
 
     try:
         # prepare env arguments – always sync host timezone
-        import os
         env = dict(env or {})
         if "TZ" not in env:
             env["TZ"] = os.environ.get("TZ") or _time.tzname[0]
@@ -133,14 +119,16 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
         for k, v in env.items():
             env_args.extend(["-e", f"{k}={v}"])
 
-        # Launch container (no --rm so we can inspect layers after exit)
+        # Launch container with bind mount
         if not quiet:
-            cprint(f"{_DIM}run: {image}{_RST}")
+            cprint(f"{_DIM}{image}, {len(snapshot)} files{_RST}")
         tty_flags = [] if capture else ["-it"]
-        docker_args = ["docker", "run", "--name", container_name,
-                        *tty_flags, "-w", mount,
+        docker_args = ["docker", "run", "--rm",
+                        *tty_flags,
+                        "-v", f"{tmpdir}:{mount}",
+                        "-w", mount,
                         *env_args,
-                        vault_image]
+                        image]
         # Build setup preamble: workspace bin on PATH + optional /bin/tool
         setup_parts = [f"export PATH={mount}/bin:$PATH"]
         if tool_shebang:
@@ -169,7 +157,7 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
             if not quiet:
                 cprint(output)
 
-        # Diff using native container layer diffing
+        # Diff via local filesystem
         if readonly:
             if not quiet:
                 cprint(f"{_DIM}Discarding changes (--readonly mode).{_RST}")
@@ -178,10 +166,7 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
             else:
                 return exit_code == 0
 
-        t2 = _time.monotonic()
-        current = _diff_from_container(client, container_name, mount, snapshot)
-        if not quiet:
-            cprint(f"{_DIM}diff: {_time.monotonic() - t2:.2f}s{_RST}")
+        current = _diff_from_dir(tmpdir, snapshot)
         _diff_and_commit(vault, snapshot, current, prefix, quiet=quiet,
                          no_version_globs=no_version_globs,
                          ignore_globs=ignore_globs,
@@ -193,27 +178,22 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
         else:
             return exit_code == 0
     finally:
-        # Clean up container and temporary image
-        t3 = _time.monotonic()
-        try:
-            c = client.containers.get(container_name)
-            c.remove(force=True)
-        except Exception:
-            pass
-        try:
-            client.images.remove(vault_image, force=True)
-        except Exception:
-            pass
-        if not quiet:
-            cprint(f"{_DIM}cleanup: {_time.monotonic() - t3:.2f}s{_RST}")
+        # Clean up temp directory
+        import shutil
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def _export_to_tar(vault, prefix, uid=0, gid=0, access=None):
-    import io
-    import tarfile
+def _build_snapshot(fs, prefix, access=None, agents_md_name="AGENTS.md"):
+    """Build a snapshot dict of {rel_path: content} from the overlay FS.
+
+    Handles prefix scoping, access filtering, and injects AGENTS.md +
+    COMMIT_MSG.  No tar is created — the dict is written directly to a
+    temp directory by _export_to_dir.
+    """
+    from system.tools import generate_agents_md
 
     search_prefix = prefix.strip("/") if prefix else ""
-    all_files = vault.list(prefix=search_prefix)
+    all_files = fs.list(prefix=search_prefix)
     if search_prefix:
         pfx = search_prefix + "/"
         files = [f for f in all_files if f.startswith(pfx)]
@@ -221,7 +201,7 @@ def _export_to_tar(vault, prefix, uid=0, gid=0, access=None):
         pfx = ""
         files = all_files
 
-    # Filter files by access rules (only export files the agent is allowed to see)
+    # Filter files by access rules
     if access:
         access_globs = [g for g, _ in access]
         files = [f for f in files if _glob_match(
@@ -229,166 +209,47 @@ def _export_to_tar(vault, prefix, uid=0, gid=0, access=None):
         )]
 
     snapshot = {}
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w") as tar:
-        dirs = set()
-        for filepath in files:
-            rel = filepath[len(pfx):] if pfx else filepath
-            parts = rel.split("/")
-            for i in range(1, len(parts)):
-                dirs.add("/".join(parts[:i]))
-        for d in sorted(dirs):
-            info = tarfile.TarInfo(name=d)
-            info.type = tarfile.DIRTYPE
-            info.mode = 0o755
-            info.uid = uid
-            info.gid = gid
-            tar.addfile(info)
+    for filepath in files:
+        content = fs.read(filepath)
+        rel = filepath[len(pfx):] if pfx else filepath
+        snapshot[rel] = content
 
-        for filepath in files:
-            content = vault.read(filepath)
-            rel = filepath[len(pfx):] if pfx else filepath
-            info = tarfile.TarInfo(name=rel)
-            info.size = len(content)
-            is_tool = content.startswith(b"#!/bin/tool") or content.startswith(b"#!/sbin/tool")
-            info.mode = 0o755 if is_tool else 0o600
-            info.uid = uid
-            info.gid = gid
-            tar.addfile(info, io.BytesIO(content))
-            snapshot[rel] = content
-
-    buf.seek(0)
-    return buf, snapshot
-
-
-def _inject_agents_md(tar_buf, snapshot, fs, uid=0, gid=0, filename="AGENTS.md", access=None):
-    """Append a dynamically generated AGENTS.md to an existing tar buffer."""
-    import io
-    import tarfile
-
-    from system.tools import generate_agents_md
-
+    # Inject AGENTS.md and empty COMMIT_MSG
     md = generate_agents_md(fs, sandbox_note=True, access=access)
+    snapshot[agents_md_name] = md.encode("utf-8")
+    snapshot["COMMIT_MSG"] = b""
 
-    content = md.encode("utf-8")
-    rel_path = filename
-
-    # Reopen the tar in append mode
-    tar_buf.seek(0)
-    with tarfile.open(fileobj=tar_buf, mode="a") as tar:
-        info = tarfile.TarInfo(name=rel_path)
-        info.size = len(content)
-        info.mode = 0o600
-        info.uid = uid
-        info.gid = gid
-        tar.addfile(info, io.BytesIO(content))
-
-        # Inject empty COMMIT_MSG file
-        commit_msg = b""
-        cm_info = tarfile.TarInfo(name="COMMIT_MSG")
-        cm_info.size = len(commit_msg)
-        cm_info.mode = 0o600
-        cm_info.uid = uid
-        cm_info.gid = gid
-        tar.addfile(cm_info, io.BytesIO(commit_msg))
-
-    snapshot[rel_path] = content
-    snapshot["COMMIT_MSG"] = commit_msg
-    tar_buf.seek(0)
+    return snapshot
 
 
-def _build_vault_image(client, base_image, tar_buf, mount, uid=0, gid=0):
-    """Create a Docker image with vault contents baked in as a layer.
+def _export_to_dir(snapshot, tmpdir, uid=0, gid=0):
+    """Write snapshot files to a temporary directory on the host."""
+    import os
 
-    Uses put_archive + commit instead of docker build to avoid the
-    Dockerfile/COPY overhead.
+    for rel, content in snapshot.items():
+        path = os.path.join(tmpdir, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(content)
+        is_tool = content.startswith(b"#!/bin/tool") or content.startswith(b"#!/sbin/tool")
+        os.chmod(path, 0o755 if is_tool else 0o600)
+
+
+def _diff_from_dir(tmpdir, snapshot):
+    """Walk the temp directory and build the current workspace state.
+
+    Pure local I/O — no Docker API calls needed.
     """
-    import uuid
+    import os
 
-    tag_suffix = uuid.uuid4().hex[:12]
-    tag = f"vault-sandbox:{tag_suffix}"
-
-    temp = client.containers.create(base_image, command="true")
-    try:
-        tar_buf.seek(0)
-        temp.put_archive(mount, tar_buf)
-
-        if uid != 0:
-            # put_archive preserves uid/gid on files from the tar, but the
-            # mount-point directory itself is owned by root.  Start a quick
-            # chown to fix it before committing.
-            temp.start()
-            temp.wait()
-            # Use exec to chown just the root dir (not recursive — files
-            # already have the right owner from the tar).
-            client.containers.run(
-                base_image,
-                command=["chown", f"{uid}:{gid}", mount],
-                volumes_from=[temp.id],
-                remove=True,
-            )
-
-        temp.commit(repository="vault-sandbox", tag=tag_suffix,
-                    changes=[f"WORKDIR {mount}"])
-    finally:
-        temp.remove(force=True)
-
-    return tag
-
-
-def _diff_from_container(client, container_name, mount, snapshot):
-    """Use Docker's native layer diff to build the current workspace state.
-
-    Only fetches files that actually changed, instead of reading back the
-    entire workspace.
-    """
-    import io
-    import tarfile
-
-    container = client.containers.get(container_name)
-    changes = container.diff() or []
-
-    current = dict(snapshot)
-    mount_prefix = mount.rstrip("/") + "/"
-
-    for change in changes:
-        path = change["Path"]
-        kind = change["Kind"]
-
-        if not path.startswith(mount_prefix):
-            continue
-        rel = path[len(mount_prefix):]
-        if not rel:
-            continue
-
-        if kind == 2:  # Deleted
-            if rel in current:
-                del current[rel]
-            else:
-                # Directory deletion — remove all children
-                dp = rel + "/"
-                for k in list(current):
-                    if k.startswith(dp):
-                        del current[k]
-        elif kind in (0, 1):  # Modified or Added
-            try:
-                bits, _ = container.get_archive(path)
-                buf = io.BytesIO()
-                for chunk in bits:
-                    buf.write(chunk)
-                buf.seek(0)
-                with tarfile.open(fileobj=buf, mode="r") as tar:
-                    members = tar.getmembers()
-                    # get_archive on a single file returns one member
-                    # (basename only, no '/').  On a directory it returns
-                    # the dir + nested entries (all containing '/').
-                    # Skip directory archives — individual files inside
-                    # will have their own diff entries.
-                    if (len(members) == 1 and members[0].isfile()
-                            and "/" not in members[0].name):
-                        current[rel] = tar.extractfile(members[0]).read()
-            except Exception:
-                pass  # Directory entry, skip
+    current = {}
+    for root, _dirs, files in os.walk(tmpdir):
+        for fname in files:
+            full = os.path.join(root, fname)
+            if os.path.islink(full) or not os.path.isfile(full):
+                continue
+            rel = os.path.relpath(full, tmpdir)
+            current[rel] = open(full, "rb").read()
 
     return current
 

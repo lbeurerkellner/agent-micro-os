@@ -1,53 +1,57 @@
 """Tests for sandbox export/import utilities."""
 
-import io
-import tarfile
+import os
+import stat
+import tempfile
 
 from fs.vault import Vault
-from bin.sandbox import _export_to_tar, _TOOL_SHEBANG_SETUP
+from bin.sandbox import _build_snapshot, _export_to_dir, _TOOL_SHEBANG_SETUP
 
 
-class TestExportToTar:
-    """Tests for _export_to_tar."""
+class TestExportToDir:
+    """Tests for _build_snapshot + _export_to_dir file permissions."""
 
     def test_tool_shebang_files_are_executable(self, temp_db):
         vault = Vault(temp_db, "tester")
         vault.write("bin/mytool", b"#!/bin/tool my description\nprint('hello')\n")
         vault.write("bin/regular", b"#!/bin/ash\necho hello\n")
 
-        buf, snapshot = _export_to_tar(vault, "")
+        snapshot = {"bin/mytool": vault.read("bin/mytool"),
+                    "bin/regular": vault.read("bin/regular")}
 
-        buf.seek(0)
-        with tarfile.open(fileobj=buf, mode="r") as tar:
-            tool_member = tar.getmember("bin/mytool")
-            regular_member = tar.getmember("bin/regular")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _export_to_dir(snapshot, tmpdir)
+            tool_mode = os.stat(os.path.join(tmpdir, "bin/mytool")).st_mode
+            regular_mode = os.stat(os.path.join(tmpdir, "bin/regular")).st_mode
 
-        assert tool_member.mode == 0o755
-        assert regular_member.mode == 0o600
+        assert tool_mode & 0o755 == 0o755
+        assert regular_mode & 0o600 == 0o600
+        assert not regular_mode & stat.S_IXUSR
 
     def test_sbin_tool_shebang_is_executable(self, temp_db):
         vault = Vault(temp_db, "tester")
         vault.write("bin/mytool", b"#!/sbin/tool\nimport sys\n")
 
-        buf, snapshot = _export_to_tar(vault, "")
+        snapshot = {"bin/mytool": vault.read("bin/mytool")}
 
-        buf.seek(0)
-        with tarfile.open(fileobj=buf, mode="r") as tar:
-            member = tar.getmember("bin/mytool")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _export_to_dir(snapshot, tmpdir)
+            mode = os.stat(os.path.join(tmpdir, "bin/mytool")).st_mode
 
-        assert member.mode == 0o755
+        assert mode & 0o755 == 0o755
 
     def test_non_tool_file_not_executable(self, temp_db):
         vault = Vault(temp_db, "tester")
         vault.write("data.txt", b"just some text\n")
 
-        buf, snapshot = _export_to_tar(vault, "")
+        snapshot = {"data.txt": vault.read("data.txt")}
 
-        buf.seek(0)
-        with tarfile.open(fileobj=buf, mode="r") as tar:
-            member = tar.getmember("data.txt")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _export_to_dir(snapshot, tmpdir)
+            mode = os.stat(os.path.join(tmpdir, "data.txt")).st_mode
 
-        assert member.mode == 0o600
+        assert mode & 0o600 == 0o600
+        assert not mode & stat.S_IXUSR
 
 
 class TestToolShebangSetup:

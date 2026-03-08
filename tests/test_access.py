@@ -1,10 +1,7 @@
 """Tests for .ACCESS directive parsing, export filtering, and commit-back validation."""
 
-import io
-import tarfile
-
 from fs.vault import Vault
-from bin.sandbox import _export_to_tar, _diff_and_commit, _inject_agents_md, _glob_match
+from bin.sandbox import _build_snapshot, _diff_and_commit, _glob_match
 from system.context import SystemContext
 from fs.providers import BinProvider
 
@@ -119,7 +116,7 @@ async def test_resolve_access_none_passthrough(temp_db):
 # ── Export filtering ─────────────────────────────────────────────────────────
 
 class TestExportAccessFiltering:
-    """_export_to_tar should only include files matching access globs."""
+    """_build_snapshot should only include files matching access globs."""
 
     def test_access_filters_export(self, temp_db):
         vault = Vault(temp_db, "tester")
@@ -128,7 +125,7 @@ class TestExportAccessFiltering:
         vault.write("secret/keys.txt", b"top secret")
 
         access = [("src/**", "rw"), ("lib/**", "ro")]
-        buf, snapshot = _export_to_tar(vault, "", access=access)
+        snapshot = _build_snapshot(vault, "", access=access)
 
         assert "src/app.py" in snapshot
         assert "lib/util.py" in snapshot
@@ -139,7 +136,7 @@ class TestExportAccessFiltering:
         vault.write("src/app.py", b"app code")
         vault.write("secret/keys.txt", b"top secret")
 
-        buf, snapshot = _export_to_tar(vault, "", access=None)
+        snapshot = _build_snapshot(vault, "", access=None)
 
         assert "src/app.py" in snapshot
         assert "secret/keys.txt" in snapshot
@@ -151,7 +148,7 @@ class TestExportAccessFiltering:
         vault.write("project/secret/keys.txt", b"top secret")
 
         access = [("src/**", "rw")]
-        buf, snapshot = _export_to_tar(vault, "project", access=access)
+        snapshot = _build_snapshot(vault, "project", access=access)
 
         assert "src/app.py" in snapshot
         assert "lib/util.py" not in snapshot
@@ -258,20 +255,14 @@ class TestCommitAccessValidation:
 # ── AGENTS.md injection ──────────────────────────────────────────────────────
 
 class TestAgentsMdAccessSection:
-    """_inject_agents_md should include access policy when access rules are set."""
+    """_build_snapshot should include access policy in AGENTS.md when access rules are set."""
 
     def test_access_section_included(self, temp_db):
-        vault = Vault(temp_db, "tester")
         with SystemContext(user="test", fsimage=temp_db, interactive=False) as ctx:
             fs = ctx.fs()
-            buf = io.BytesIO()
-            with tarfile.open(fileobj=buf, mode="w") as tar:
-                pass
-            buf.seek(0)
-            snapshot = {}
 
             access = [("src/**", "rw"), ("lib/**", "ro")]
-            _inject_agents_md(buf, snapshot, fs, access=access)
+            snapshot = _build_snapshot(fs, "", access=access)
 
             content = snapshot["AGENTS.md"].decode()
             assert "File Access Policy" in content
@@ -281,31 +272,19 @@ class TestAgentsMdAccessSection:
             assert "rejected" in content.lower() or "lost" in content.lower()
 
     def test_commit_msg_injected(self, temp_db):
-        vault = Vault(temp_db, "tester")
         with SystemContext(user="test", fsimage=temp_db, interactive=False) as ctx:
             fs = ctx.fs()
-            buf = io.BytesIO()
-            with tarfile.open(fileobj=buf, mode="w") as tar:
-                pass
-            buf.seek(0)
-            snapshot = {}
 
-            _inject_agents_md(buf, snapshot, fs, access=None)
+            snapshot = _build_snapshot(fs, "", access=None)
 
             # COMMIT_MSG should always be injected
             assert "COMMIT_MSG" in snapshot
 
     def test_no_access_no_policy_section(self, temp_db):
-        vault = Vault(temp_db, "tester")
         with SystemContext(user="test", fsimage=temp_db, interactive=False) as ctx:
             fs = ctx.fs()
-            buf = io.BytesIO()
-            with tarfile.open(fileobj=buf, mode="w") as tar:
-                pass
-            buf.seek(0)
-            snapshot = {}
 
-            _inject_agents_md(buf, snapshot, fs, access=None)
+            snapshot = _build_snapshot(fs, "", access=None)
 
             content = snapshot["AGENTS.md"].decode()
             assert "File Access Policy" not in content
