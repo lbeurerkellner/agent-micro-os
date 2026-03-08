@@ -94,11 +94,16 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
     vault = Vault(ctx.fsimage, ctx.user)
     fs = ctx.fs()
 
+    import time as _time
+
     # Export (use overlay FS so provider-mounted files like /docs are included)
+    t0 = _time.monotonic()
     tar_buf, snapshot = _export_to_tar(fs, prefix, uid=uid, gid=uid, access=access)
 
     # Inject dynamically generated etc/AGENTS.md into the export
     _inject_agents_md(tar_buf, snapshot, fs, uid=uid, gid=uid, filename=agents_md_name, access=access)
+    if not quiet:
+        cprint(f"{_DIM}export: {len(snapshot)} files, {_time.monotonic() - t0:.2f}s{_RST}")
 
     # Track snapshot entries that came from providers (not in the raw vault) so
     # they are excluded from diff/commit — they are read-only by definition.
@@ -106,30 +111,21 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
     provider_files = {rel for rel in snapshot if not vault.exists(pfx + rel)}
 
     client = docker.from_env()
-    vol_name = f"vault-{uuid.uuid4().hex[:12]}"
-    vol = client.volumes.create(vol_name)
+
+    # Build a temporary image with vault contents baked in as a layer.
+    # This lets us use container.diff() after the run to detect only
+    # the files the agent actually changed, instead of reading back
+    # the entire workspace.
+    t1 = _time.monotonic()
+    vault_image = _build_vault_image(client, image, tar_buf, mount,
+                                     uid=uid, gid=uid)
+    if not quiet:
+        cprint(f"{_DIM}build: {_time.monotonic() - t1:.2f}s{_RST}")
+    container_name = f"vault-{uuid.uuid4().hex[:12]}"
 
     try:
-        # Populate volume
-        temp = client.containers.create(
-            "alpine", volumes={vol_name: {"bind": "/data", "mode": "rw"}}
-        )
-        temp.put_archive("/data", tar_buf)
-        temp.remove()
-
-        # Fix ownership of the volume root itself (put_archive doesn't chown
-        # the pre-existing /data directory, only its contents)
-        if uid != 0:
-            client.containers.run(
-                "alpine",
-                command=["chown", f"{uid}:{uid}", "/data"],
-                volumes={vol_name: {"bind": "/data", "mode": "rw"}},
-                remove=True,
-            )
-
         # prepare env arguments – always sync host timezone
         import os
-        import time as _time
         env = dict(env or {})
         if "TZ" not in env:
             env["TZ"] = os.environ.get("TZ") or _time.tzname[0]
@@ -137,15 +133,14 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
         for k, v in env.items():
             env_args.extend(["-e", f"{k}={v}"])
 
-        # Launch container
+        # Launch container (no --rm so we can inspect layers after exit)
         if not quiet:
-            cprint(f"{_DIM}{image}, {len(snapshot)} files exported{_RST}")
+            cprint(f"{_DIM}run: {image}{_RST}")
         tty_flags = [] if capture else ["-it"]
-        docker_args = ["docker", "run", "--rm",
-                        *tty_flags,
-                        "-v", f"{vol_name}:{mount}", "-w", mount,
+        docker_args = ["docker", "run", "--name", container_name,
+                        *tty_flags, "-w", mount,
                         *env_args,
-                        image]
+                        vault_image]
         # Build setup preamble: workspace bin on PATH + optional /bin/tool
         setup_parts = [f"export PATH={mount}/bin:$PATH"]
         if tool_shebang:
@@ -174,8 +169,7 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
             if not quiet:
                 cprint(output)
 
-        # Diff and commit
-        current = _read_volume(client, vol_name)
+        # Diff using native container layer diffing
         if readonly:
             if not quiet:
                 cprint(f"{_DIM}Discarding changes (--readonly mode).{_RST}")
@@ -183,6 +177,11 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
                 return f"{output}\n[exit code: {exit_code}]"
             else:
                 return exit_code == 0
+
+        t2 = _time.monotonic()
+        current = _diff_from_container(client, container_name, mount, snapshot)
+        if not quiet:
+            cprint(f"{_DIM}diff: {_time.monotonic() - t2:.2f}s{_RST}")
         _diff_and_commit(vault, snapshot, current, prefix, quiet=quiet,
                          no_version_globs=no_version_globs,
                          ignore_globs=ignore_globs,
@@ -194,7 +193,19 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
         else:
             return exit_code == 0
     finally:
-        vol.remove()
+        # Clean up container and temporary image
+        t3 = _time.monotonic()
+        try:
+            c = client.containers.get(container_name)
+            c.remove(force=True)
+        except Exception:
+            pass
+        try:
+            client.images.remove(vault_image, force=True)
+        except Exception:
+            pass
+        if not quiet:
+            cprint(f"{_DIM}cleanup: {_time.monotonic() - t3:.2f}s{_RST}")
 
 
 def _export_to_tar(vault, prefix, uid=0, gid=0, access=None):
@@ -286,33 +297,100 @@ def _inject_agents_md(tar_buf, snapshot, fs, uid=0, gid=0, filename="AGENTS.md",
     tar_buf.seek(0)
 
 
-def _read_volume(client, vol_name):
+def _build_vault_image(client, base_image, tar_buf, mount, uid=0, gid=0):
+    """Create a Docker image with vault contents baked in as a layer.
+
+    Uses put_archive + commit instead of docker build to avoid the
+    Dockerfile/COPY overhead.
+    """
+    import uuid
+
+    tag_suffix = uuid.uuid4().hex[:12]
+    tag = f"vault-sandbox:{tag_suffix}"
+
+    temp = client.containers.create(base_image, command="true")
+    try:
+        tar_buf.seek(0)
+        temp.put_archive(mount, tar_buf)
+
+        if uid != 0:
+            # put_archive preserves uid/gid on files from the tar, but the
+            # mount-point directory itself is owned by root.  Start a quick
+            # chown to fix it before committing.
+            temp.start()
+            temp.wait()
+            # Use exec to chown just the root dir (not recursive — files
+            # already have the right owner from the tar).
+            client.containers.run(
+                base_image,
+                command=["chown", f"{uid}:{gid}", mount],
+                volumes_from=[temp.id],
+                remove=True,
+            )
+
+        temp.commit(repository="vault-sandbox", tag=tag_suffix,
+                    changes=[f"WORKDIR {mount}"])
+    finally:
+        temp.remove(force=True)
+
+    return tag
+
+
+def _diff_from_container(client, container_name, mount, snapshot):
+    """Use Docker's native layer diff to build the current workspace state.
+
+    Only fetches files that actually changed, instead of reading back the
+    entire workspace.
+    """
     import io
     import tarfile
 
-    temp = client.containers.create(
-        "alpine", volumes={vol_name: {"bind": "/data", "mode": "rw"}}
-    )
-    try:
-        bits, _ = temp.get_archive("/data")
-        buf = io.BytesIO()
-        for chunk in bits:
-            buf.write(chunk)
-        buf.seek(0)
+    container = client.containers.get(container_name)
+    changes = container.diff() or []
 
-        current = {}
-        with tarfile.open(fileobj=buf, mode="r") as tar:
-            for member in tar.getmembers():
-                if not member.isfile():
-                    continue
-                name = member.name
-                if name.startswith("data/"):
-                    name = name[len("data/"):]
-                if name:
-                    current[name] = tar.extractfile(member).read()
-        return current
-    finally:
-        temp.remove()
+    current = dict(snapshot)
+    mount_prefix = mount.rstrip("/") + "/"
+
+    for change in changes:
+        path = change["Path"]
+        kind = change["Kind"]
+
+        if not path.startswith(mount_prefix):
+            continue
+        rel = path[len(mount_prefix):]
+        if not rel:
+            continue
+
+        if kind == 2:  # Deleted
+            if rel in current:
+                del current[rel]
+            else:
+                # Directory deletion — remove all children
+                dp = rel + "/"
+                for k in list(current):
+                    if k.startswith(dp):
+                        del current[k]
+        elif kind in (0, 1):  # Modified or Added
+            try:
+                bits, _ = container.get_archive(path)
+                buf = io.BytesIO()
+                for chunk in bits:
+                    buf.write(chunk)
+                buf.seek(0)
+                with tarfile.open(fileobj=buf, mode="r") as tar:
+                    members = tar.getmembers()
+                    # get_archive on a single file returns one member
+                    # (basename only, no '/').  On a directory it returns
+                    # the dir + nested entries (all containing '/').
+                    # Skip directory archives — individual files inside
+                    # will have their own diff entries.
+                    if (len(members) == 1 and members[0].isfile()
+                            and "/" not in members[0].name):
+                        current[rel] = tar.extractfile(members[0]).read()
+            except Exception:
+                pass  # Directory entry, skip
+
+    return current
 
 
 def _glob_match(fp, globs):
