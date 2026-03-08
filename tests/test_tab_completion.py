@@ -147,3 +147,25 @@ def test_path_completion_relative_subdirectory(temp_db):
 
         completions = get_path_completions("tutorials/i", "/docs", vault)
         assert "tutorials/intro.md" in completions
+
+
+def test_path_completion_explicit_empty_dir(temp_db):
+    """Tab completion includes explicit empty directories created with mkdir."""
+    with SystemContext(user="mkdir_user", fsimage=temp_db):
+        vault = SystemContext.current().fs()
+        vault.write("file.txt", b"content")
+        vault.mkdir("empty_dir")
+
+        completions = get_path_completions("em", "/", vault)
+        assert "empty_dir/" in completions
+
+
+def test_path_completion_nested_explicit_empty_dir(temp_db):
+    """Tab completion includes nested explicit empty directories."""
+    with SystemContext(user="mkdir_user", fsimage=temp_db):
+        vault = SystemContext.current().fs()
+        vault.write("docs/readme.md", b"readme")
+        vault.mkdir("docs/drafts")
+
+        completions = get_path_completions("docs/d", "/", vault)
+        assert "docs/drafts/" in completions

@@ -142,7 +142,7 @@ def test_delete_nonempty_dir_raises(temp_db):
     vault = Vault(temp_db, "user1")
     vault.mkdir("docs")
     vault.write("docs/file.txt", b"content")
-    with pytest.raises(ValueError, match="not empty"):
+    with pytest.raises(ValueError, match="is a directory"):
         vault.delete("docs")
 
 

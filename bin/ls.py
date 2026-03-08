@@ -17,8 +17,10 @@ def _list_directory(vault, path: str) -> list[str]:
         path = path.lstrip('/')
         prefix = path + '/'
 
+    vault_prefix = path.lstrip('/') if path not in ('/', '') else ''
+
     # Get files from the vault, filtered by prefix
-    files = vault.list(prefix=path.lstrip('/') if path not in ('/', '') else '')
+    files = vault.list(prefix=vault_prefix)
 
     # Find direct children (files and dirs)
     entries = []
@@ -53,6 +55,12 @@ def _list_directory(vault, path: str) -> list[str]:
                 entries.append(subdir + '/')  # Add trailing slash to indicate directory
                 seen.add(subdir)
 
+    # Include explicit directories (created with mkdir) that have no files yet
+    for dir_name in vault.list_dirs(prefix=vault_prefix):
+        if dir_name not in seen:
+            entries.append(dir_name + '/')
+            seen.add(dir_name)
+
     return sorted(entries)
 
 
@@ -69,7 +77,9 @@ def _list_directory_with_timestamps(vault, path: str) -> list[tuple[str, str | N
         path = path.lstrip('/')
         prefix = path + '/'
 
-    metas = vault.list_with_metadata(prefix=path.lstrip('/') if path not in ('/', '') else '')
+    vault_prefix = path.lstrip('/') if path not in ('/', '') else ''
+
+    metas = vault.list_with_metadata(prefix=vault_prefix)
     # Build lookup from full filepath to timestamp
     ts_by_path = {m.filepath: m.timestamp for m in metas}
 
@@ -96,6 +106,12 @@ def _list_directory_with_timestamps(vault, path: str) -> list[tuple[str, str | N
             if subdir and subdir not in seen:
                 entries.append((subdir + '/', None))
                 seen.add(subdir)
+
+    # Include explicit directories (created with mkdir) that have no files yet
+    for dir_name in vault.list_dirs(prefix=vault_prefix):
+        if dir_name not in seen:
+            entries.append((dir_name + '/', None))
+            seen.add(dir_name)
 
     # Sort: files by timestamp descending (most recent first), directories last
     return sorted(entries, key=lambda e: (e[1] is not None, e[1] or ''), reverse=True)

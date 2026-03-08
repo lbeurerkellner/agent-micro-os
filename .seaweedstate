@@ -1,0 +1,156 @@
+# seaweed triage state (rule_id|file_path|chunk_hash|reason)
+authentication-over-http|bin/web.py|2aa657bd29bd6540e6a7c09f5c5b31819ca2de49e06b4a62f1354ca601bb40d9|mitigated: server binds to 127.0.0.1 by default
+broken-user-authentication|bin/web.py|2269068ed326eb481b1c78ab63920728197e8bafece63db72b2ed2edc7d325b4|n/a: correct auth implementation with bcrypt + secure session tokens
+broken-user-authentication|bin/web.py|2aa657bd29bd6540e6a7c09f5c5b31819ca2de49e06b4a62f1354ca601bb40d9|n/a: correct auth — bcrypt password hashing + secrets.token_urlsafe session tokens
+broken-user-authentication|bin/web.py|75c23f08c3d895a9c9af10b4f7dbd74b461fa6cbee6ed7633f292428e75f5b73|n/a: cookie reader not setter; httponly=True is set
+broken-user-authentication|bin/web.py|a23eefa9144da3a832214934e6216a786c177225f6e4187b1f7fd2da8d09c963|n/a: correct auth — bcrypt + secrets.token_urlsafe session tokens
+broken-user-authentication|bin/web.py|a61da3f1490a3c038facc6c6115b35c1b6921dfe293c04f9d3ac3c0dc81fe723|n/a: correct auth — secrets.token_urlsafe + httponly cookie
+broken-user-authentication|bin/web.py|bfcdaff904fbb6c3f2c7b85c355331ccfb7f8a5dc761c781b568005dda8fcda2|n/a: bcrypt password hashing is correct implementation
+broken-user-authentication|bin/web.py|f49cc39846d953b3f931fc99635d99fa7389deecb104cd9744ef0a95c94a9c67|n/a: correct auth — bcrypt + secrets.token_urlsafe session tokens
+code-injection|tests/test_terminal_markdown.py|7c036fd21bc550507d71284b20999e6096310f99581432c9ca3e3dd2e278f535|n/a: test fixture
+command-injection|bin/ash.py|320f3a3d33328210f56f70d55e8b8c1a7b2a76cb0d4bdad50500688121d39dab|n/a: intentional shell interpreter by design
+command-injection|bin/ash.py|46a242efc11c|n/a: intentional shell interpreter by design
+command-injection|bin/ash.py|46a242efc11c91ce06fc4eedd8e6e5fffe8344240454bf53bc52ba75f72cb066|n/a: intentional shell interpreter by design
+command-injection|bin/ash.py|bcc7c528dc033d3d1f7cfdabcc65ecf80a4491f7c5d099d685883c0bed41615e|n/a: intentional shell interpreter by design
+command-injection|bin/ash.py|d3c2de35e13b|n/a: intentional shell interpreter by design
+command-injection|bin/sandbox.py|0ff2a7b1eeec|n/a: intentional Docker sandbox launcher
+command-injection|bin/vim.py|3786401adeca0cbd0648b36b042ea8a96adf47bf23214278caccad52cf15163e|n/a: subprocess.call with list args, no shell injection possible
+command-injection|bin/vim.py|c34056458a583335ff5e7510519e2fb05643e3256fab8da22728bba2f54bd016|n/a: subprocess.call with list args, no shell=True
+command-injection|bin/write.py|63fc05d53e5e2cae416e3a7f2876fcf9c92ebf17f8506745c0cfa7e1b391aef8|n/a: writes to vault (SQLite), not OS commands
+command-injection|system/execute.py|2edfc93eee22|n/a: intentional program execution system for agent micro OS
+command-injection|system/program.py|49ac017bd81907c124acbafea94a26bc2ae6904a906d8852e20b16bc7cda1b06|n/a: intentional program execution for agent micro OS
+command-injection|system/program.py|78358f34645006ac979f0b98cb7a5c2c70b31a2358b4d24d1b8b4b7abb762df6|n/a: intentional program execution engine for agent micro OS
+command-injection|system/program.py|8b2ff891ec5dd27a3cf98ad1de800d075b8e2e0942e9ac1b9c46975fcecbedcc|n/a: intentional program execution engine for agent micro OS
+command-injection|system/program.py|cef37deeb3f1|n/a: intentional program execution engine for agent micro OS
+command-injection|tests/test_sandbox.py|d9d78a5e1056ef1e854265261c5f46f7ace970e8cc3ad285ed3fe1da1e6795ad|n/a: test fixture
+cookie-no-httponly|bin/web.py|2739e56c5e26e01f12417d76cdca4dfc874a5aeaecbf4898eaf7068e6df10ab3|n/a: httponly=True is set on the cookie
+cookie-no-httponly|bin/web.py|5305d8e30eab|n/a: httponly=True is set on set_cookie call at line 269
+cookie-no-httponly|bin/web.py|75c23f08c3d8|n/a: cookie reader not setter; cookie is set with httponly=True
+cookie-no-httponly|bin/web.py|75c23f08c3d895a9c9af10b4f7dbd74b461fa6cbee6ed7633f292428e75f5b73|n/a: httponly=True is set on the cookie
+cookie-no-httponly|bin/web.py|a61da3f1490a3c038facc6c6115b35c1b6921dfe293c04f9d3ac3c0dc81fe723|n/a: httponly=True is set on set_cookie call
+cookie-no-secure|bin/web.py|2739e56c5e26e01f12417d76cdca4dfc874a5aeaecbf4898eaf7068e6df10ab3|mitigated: localhost server
+cookie-no-secure|bin/web.py|75c23f08c3d8|mitigated: server binds to 127.0.0.1 by default, secure flag not needed for localhost
+cookie-no-secure|bin/web.py|75c23f08c3d895a9c9af10b4f7dbd74b461fa6cbee6ed7633f292428e75f5b73|mitigated: localhost server, secure flag not needed
+cookie-no-secure|bin/web.py|a61da3f1490a3c038facc6c6115b35c1b6921dfe293c04f9d3ac3c0dc81fe723|mitigated: server binds to 127.0.0.1 by default, secure flag not needed for localhost
+django-password-requirements|bin/web.py|2aa657bd29bd6540e6a7c09f5c5b31819ca2de49e06b4a62f1354ca601bb40d9|n/a: not Django, uses bcrypt for password hashing
+improper-privilege-handling|bin/sandbox.py|0ff2a7b1eeec|n/a: Docker sandbox privilege model is by design
+improper-privilege-handling|system/program.py|49ac017bd819|n/a: --dangerously-skip-permissions is intentional for agent-managed processes
+improper-privilege-handling|system/program.py|49ac017bd81907c124acbafea94a26bc2ae6904a906d8852e20b16bc7cda1b06|n/a: intentional program execution for agent micro OS
+improper-privilege-handling|system/program.py|78358f34645006ac979f0b98cb7a5c2c70b31a2358b4d24d1b8b4b7abb762df6|n/a: intentional design - dangerously-skip-permissions is by design for agent micro OS
+improper-privilege-handling|tests/test_access.py|20b5c456e94366be53aa3fb1f02a3329514cae3bc27a5fee49004dad27034d25|n/a: test fixture
+improper-privilege-handling|tests/test_access.py|ca70f3a9c0827677dafcadf0604e898f61dbd77d38f54068e18457a1ae022b8d|n/a: test fixture
+insecure-default-value|system/program.py|da4df8d9fd2b16d7c441e20426648158496a3f051b90341422f58ad7da454917|n/a: default config values for agent program framework
+insecure-file-permissions|fs/overlay.py|aa194b9d81560bedaf858bfca401925234f51f4fcd05910540efb2c20ea32fdc|n/a: virtual filesystem overlay, delegates to SQLite vault
+insecure-file-permissions|fs/vaultfs.py|60ecfc8a7c89c29e6ea53c2f1b592abfa427f3245cdbf953302040ccef123b93|n/a: FUSE virtual filesystem, permissions are in-memory
+insecure-file-permissions|fs/vaultfs.py|e8121ce16e58624627305c79b675a829e90cf1d35b33fd6fbd0900591f28d2f3|n/a: FUSE virtual filesystem, permissions are in-memory attributes
+insecure-file-permissions|tests/test_agentvault.py|9213c7b91b35b7e6454eaa89b61aa10e46f11eff2c00f9480efb3a704a1a4d67|n/a: test fixture
+insecure-temp-file|bin/sandbox.py|0ff2a7b1eeec|n/a: uses Docker volumes, no temp files
+insecure-temp-file|bin/vim.py|3786401adeca0cbd0648b36b042ea8a96adf47bf23214278caccad52cf15163e|mitigated: uses tempfile.NamedTemporaryFile, file deleted after use with os.unlink
+insecure-temp-file|bin/vim.py|682459e052aebf523644406528c89cf6d6363b0e09d80028f3c9ecfec881ae75|mitigated: NamedTemporaryFile with cleanup
+insecure-temp-file|bin/vim.py|c34056458a583335ff5e7510519e2fb05643e3256fab8da22728bba2f54bd016|mitigated: NamedTemporaryFile + os.unlink cleanup
+insecure-temp-file|fs/vault.py|c65be7482cc86dc83530bc74f98435557d630f66037350bbf7889574db53a193|n/a: no temp file — reads from SQLite vault
+insecure-temp-file|system/execute.py|2a3ebc1682c7fcacf468c4e5b93e22ddad771d7880a284e395054b53b52f89d0|n/a: writes to vault tmp/ directory, not OS temp files
+insecure-temp-file|system/execute.py|3851768a112a6ae7df5b9c92605cf0fd9fae9271f149dc5acf901714546ae302|n/a: writes to vault tmp/ directory, not OS temp files
+insecure-temp-file|tests/conftest.py|f1e41b02e2ba11238d953972dc7c1f538af73c1bcd85529abbe7e68d237084a9|n/a: test fixture
+insecure-temp-file|tests/test_agentvault.py|3190f6923e2a|n/a: test fixture
+insecure-temp-file|tests/test_agentvault.py|3190f6923e2a9b2b9de8263234f6ff432b90d21400d749ea78c6fabeceb93429|n/a: test fixture
+insecure-temp-file|tests/test_rm.py|fb77684592d89a1c0368e3c82384f42369ab17c25ab3319b7651ad50a7a3a968|n/a: test fixture
+insecure-temp-file|tests/test_sandbox.py|4aa279d3c78706aefccc3c3efcd4a894b9a12cf35a7fe3c50aebe55e34a846a4|n/a: test fixture
+nosql-injection|bin/web.py|04a14fae52a274fb944697c80e9413b665a1962bdebf391bc41832a0ad34889a|n/a: uses SQLite vault not NoSQL database
+nosql-injection|bin/web.py|2269068ed326eb481b1c78ab63920728197e8bafece63db72b2ed2edc7d325b4|n/a: uses SQLite vault not NoSQL database
+nosql-injection|bin/web.py|2aa657bd29bd6540e6a7c09f5c5b31819ca2de49e06b4a62f1354ca601bb40d9|n/a: uses SQLite vault not NoSQL database
+nosql-injection|bin/web.py|3ace3af76c22f214ca3cad753c996801c92a8af9b224cf5bb5b8255639cbb49c|n/a: uses SQLite vault not NoSQL database
+nosql-injection|bin/web.py|a23eefa9144da3a832214934e6216a786c177225f6e4187b1f7fd2da8d09c963|n/a: uses SQLite vault not NoSQL database
+nosql-injection|bin/web.py|a61da3f1490a3c038facc6c6115b35c1b6921dfe293c04f9d3ac3c0dc81fe723|n/a: uses SQLite vault not NoSQL database
+nosql-injection|bin/web.py|b62abd88845ff5a715cc429517933c020b40c21a5deccd0eec35a30f24a326fd|n/a: uses SQLite vault not NoSQL database
+nosql-injection|bin/web.py|bfcdaff904fbb6c3f2c7b85c355331ccfb7f8a5dc761c781b568005dda8fcda2|n/a: uses SQLite vault not NoSQL database
+nosql-injection|bin/web.py|f49cc39846d953b3f931fc99635d99fa7389deecb104cd9744ef0a95c94a9c67|n/a: uses SQLite vault not NoSQL
+open-redirect|bin/web.py|2269068ed326eb481b1c78ab63920728197e8bafece63db72b2ed2edc7d325b4|n/a: hardcoded redirect targets
+open-redirect|bin/web.py|a61da3f1490a3c038facc6c6115b35c1b6921dfe293c04f9d3ac3c0dc81fe723|n/a: redirects to hardcoded paths (/notes/, /login), not user-controlled
+open-redirect|bin/web.py|b62abd88845ff5a715cc429517933c020b40c21a5deccd0eec35a30f24a326fd|n/a: hardcoded redirect targets
+path-traversal|bin/ash.py|3ed2974d85489397c838cac27c76d63ddd42e9c3271a94fdc186befde8af01c2|n/a: virtual filesystem path resolution, not OS paths
+path-traversal|bin/ash.py|fa851b49d182c69be20a21dcf64359e4f7145f432574d9b013c2bc0949209e4a|n/a: virtual filesystem path resolution
+path-traversal|bin/ls.py|01ca464400400ddaccd0149719c80c03e95c4023145efac27f363ca58a49b7aa|n/a: virtual filesystem directory listing
+path-traversal|bin/ls.py|daedc78612330e92fcbc950c591c93d5a21a8b812a80f958f3e461a9cfe3b4eb|n/a: virtual filesystem directory listing
+path-traversal|bin/web.py|2be2b2dab3e3|n/a: reads from vault (SQLite), not OS filesystem
+path-traversal|bin/web.py|57caece437735faea43705a104881e4cc787a8004d961cc3a27a73faecdaa51c|n/a: reads from vault, not OS filesystem
+path-traversal|bin/web.py|59c9143a3dd5464af6ac703ed65b0a879a130d74084bf1977e50972bf4c8c7d0|n/a: reads from vault SQLite not OS filesystem
+path-traversal|bin/web.py|7ba174e69e1d1754ca9d3b18993ca1898eb4c6acf6c6b6bffa54156748c7ab7c|n/a: reads from vault SQLite not OS filesystem
+path-traversal|bin/web.py|8c7eccd2af932e6bf3ea49a011fb652cef1fbe6668efb1ee195214d23234ad83|n/a: reads from vault (SQLite virtual filesystem), not OS filesystem
+path-traversal|bin/web.py|c1868b99d42f1678797a076e986635ae84cce8cd3df1711ac3e870219cc18316|n/a: reads from vault, not OS filesystem
+path-traversal|bin/web.py|d5640f5b4ccdfaaed5a443b5955aa2ac43f0a0a2b7579db36a156b5ec3b2262c|n/a: reads from vault (SQLite), not OS filesystem
+path-traversal|bin/web.py|f75134d59d700988accbff957d9112d0760ca590639696cf30d4da1b59073f4a|n/a: reads from vault, not OS filesystem
+path-traversal|fs/overlay.py|0b124032e4900664c725bcd535e51f2d0a551793fe0a9e3f580488eb3f6b30fa|n/a: virtual filesystem overlay
+path-traversal|fs/overlay.py|0e3b67fe0cf7|n/a: virtual filesystem overlay, delegates to SQLite vault
+path-traversal|fs/overlay.py|3a8e5a1e104b|n/a: virtual filesystem overlay, delegates to SQLite vault
+path-traversal|fs/overlay.py|7e606c862566e82a30a41260851b15d88e2b1320aafd156cf936a0f49dc894a8|n/a: virtual filesystem overlay
+path-traversal|fs/overlay.py|c8be02f7d1391efe743676c43e43a02431652b5b6ef1633f23812a9fff2beba4|n/a: virtual filesystem overlay
+path-traversal|fs/overlay.py|e1aeea6e5f52|n/a: virtual filesystem overlay
+path-traversal|fs/providers.py|55a14fcab3b2f300703517f134415cb0be2850b362302dc81503a0e8c69d21af|mitigated: _safe_path uses Path.resolve plus is_relative_to to prevent traversal
+path-traversal|fs/providers.py|6f2b0b8dd6627d193b1815fbfd8c1fedc59d7603dcaa70e06b770c579bb1e392|n/a: hardcoded Path(__file__).resolve() - no user input
+path-traversal|fs/providers.py|9a2b52717df991720f5efaf9a5fb05d576df1227ffe9857ba3514fe55fac100c|mitigated: read uses _safe_path which prevents traversal outside docs/
+path-traversal|fs/providers.py|b424b762da9ef232ce271551b0408ae0ffacd86e96c9ab2a477414fb46a5984e|mitigated: DocsProvider uses _safe_path containment check on all OS filesystem access
+path-traversal|fs/providers.py|b83458391214dfe97607621adad92fa2996eaccb53449288c12f60a97a11c136|n/a: virtual read-only provider, no OS path access
+path-traversal|fs/providers.py|e08812b6485324520950de0a6c8d650d744bcce6b2ace297eac9961a71e6f81e|mitigated: is_dir uses _safe_path which resolves and validates path stays within _root
+path-traversal|fs/providers.py|f75cab47d16cbd1cb534b12d91f70dbd505ef6c0a6219df59e693e2778c9deec|n/a: virtual read-only provider
+path-traversal|fs/providers.py|fd024523458f62c5a943aa9502ddbf88a42e7248a387c85bbcc9014b1e3c1026|mitigated: exists uses _safe_path which resolves and validates path stays within _root
+path-traversal|fs/utils.py|6972507eec93c64a0f882d2ee74098b5ee878e353b3b3204a53f2e6742dbd5d6|n/a: path resolution for virtual filesystem
+path-traversal|fs/utils.py|bd1ec3f63b799cc25622cc0f4127c5d5b0bc6eaf611dcec742c1f600d9a252a2|n/a: path resolution for virtual filesystem
+path-traversal|fs/vault.py|0814cdad13654f729544d94a63ea75c0175083ab65a30c0d4cb2dea81819da3e|n/a: SQLite-backed virtual filesystem
+path-traversal|fs/vault.py|0965eb7d3803|n/a: internal virtual filesystem backed by SQLite, no OS file access
+path-traversal|fs/vault.py|0965eb7d38039dc2b4906acbbf25f13ce819b8a0893c3c4cf0f12dc87ff453e9|n/a: SQLite-backed virtual filesystem, no OS path access
+path-traversal|fs/vault.py|370273a1a50d0a5c788189673215e01af9a545ea2944c9e9ef3183d314005ff9|n/a: SQLite-backed virtual filesystem
+path-traversal|fs/vault.py|4281ab75031edd46d2f1f4329598719eed85ba2af990cb8821ff12a466d9f1c0|n/a: SQLite-backed virtual filesystem
+path-traversal|fs/vault.py|5f1e3e5b3ac2|n/a: SQLite-backed virtual filesystem, no OS path access
+path-traversal|fs/vault.py|7ac15e94b714|n/a: SQLite-backed virtual filesystem, no OS path access
+path-traversal|fs/vault.py|8b28fae4b9986d90a30dd45110495bd1b6168e8ce55a6b86095932fba5572bdb|n/a: SQLite-backed virtual filesystem
+path-traversal|fs/vault.py|907397cc294755dcd661a21deac74198f0eacd20fde397830823341378f490e1|n/a: SQLite-backed virtual filesystem
+path-traversal|fs/vault.py|a9ba86cbcbc65d8bca2f1df6b62339ec6cb61c7c689054e95e63cda90d421583|n/a: SQLite-backed virtual filesystem
+path-traversal|fs/vault.py|b976224d2b916b682dc712b1c5b4b5b83e654ff604fab27183404a24c5715719|n/a: SQLite-backed virtual filesystem
+path-traversal|fs/vault.py|c65be7482cc86dc83530bc74f98435557d630f66037350bbf7889574db53a193|n/a: SQLite-backed virtual filesystem, no OS path access
+path-traversal|fs/vault.py|ce57292a7ce4d62eebb8bcded302b6c81992094905991432d0a80509a955375a|n/a: SQLite-backed virtual filesystem
+path-traversal|fs/vault.py|d504a67fb24220fadecaa1ad8a1c1ff11d8ab886cd42beaedd98fa258755c67d|n/a: SQLite-backed virtual filesystem, no OS path access
+path-traversal|fs/vault.py|ff90a78bb90001c9780641f1b908d3160ed1e344a6fff631849392ad8f8da5a1|n/a: SQLite-backed virtual filesystem
+path-traversal|tests/test_agentvault.py|ac36d5d9f4e7291ae717218bcffa7a04b20ea54dda909b9eedabcb6198508122|n/a: test fixture
+path-traversal|tests/test_find.py|2a826dd4353330be11afe3b41ba7e32aa581a3395738ff26625c2da499f4e33a|n/a: test fixture
+path-traversal|tests/test_overlay.py|616442f6bcd93257900a418b4cc619a5065f1e123cf3f0d209eb1118343f6dfb|n/a: test fixture
+path-traversal|tests/test_overlay.py|73bbcf4e42ca0998b1326ffaedb6a6acddcb2c7aca6730e300f221a2e2ba0ee3|n/a: test fixture with in-memory dict provider
+python2-source-code|bin/sandbox.py|da2e62d6f59a84b9355ef053f91ae141fa3518b0695cc5e6fdc399d9617041e0|n/a: Python 3 codebase, module-level imports only
+redos|bin/grep.py|aa3322b1b763c0bdc6e43f5ad7ed0488a97a719f934b03a4f7489468af611734|n/a: intentional grep tool
+redos|bin/grep.py|dca8b6052c1a68fa15b22546c57c81122bea3436d66fbcfc3d6074921b02bedd|n/a: intentional grep tool, user-supplied regex is by design
+redos|bin/sandbox.py|4a29d66fff3f8c0f9f3b4124a8dbaa03736d62694d28e4bd6aed96db52d44049|n/a: internal regex for glob matching, not user-supplied
+redos|bin/sandbox.py|eb9eb3ea5c84c95b60faa987174fdfbe6498c7e0d7830a7d315db71b89c34c2e|n/a: internal regex for glob matching
+regex-injection|bin/grep.py|a948bc7e8017|n/a: intentional grep implementation, -F flag available for fixed strings
+sql-injection|fs/vault.py|23eb8e7ed56b3d499f7c8e2d8e4ed808b1218cbdc86ba08cf6af9469b70ea57a|n/a: parameterized queries with ? placeholders
+sql-injection|fs/vault.py|3577d43d3213498d539ce8973efbb55ba55962987ac2df3845a602826c55576a|n/a: parameterized queries with ? placeholders
+sql-injection|fs/vault.py|471b5ab96a69a810e0ae53d01a40ed2f1abc067853878eba92faff3acc8d97eb|n/a: parameterized queries with ? placeholders
+sql-injection|fs/vault.py|6d5772647005a01ffa82899abbf85ab89e36570247f6cbdae5def88750855698|n/a: parameterized queries with ? placeholders
+sql-injection|fs/vault.py|881be69391160d220de0075344a2844f5206cb179a3202326ff18ca63acc2fed|n/a: parameterized queries with ? placeholders
+sql-injection|fs/vault.py|8b13b9f0991f7182906031bd0803564cb121ebae3c0bede60a9f67b263d78871|n/a: parameterized queries with ? placeholders
+sql-injection|fs/vault.py|8fbd537cbaaa00b9b94ed33aa89d10f82bcbe42ef9431f89df6e158555e75370|n/a: parameterized queries with ? placeholders
+sql-injection|fs/vault.py|9840522cad6b10e4bbed768b69aaf614cd12632345570c08742fdc7c2731fd14|n/a: parameterized queries with ? placeholders
+sql-injection|fs/vault.py|b803ddbcca79c229f3c7fff898b833f7b2d1ada805f9d9115010a68526d8b8ee|n/a: parameterized queries with ? placeholders
+sql-injection|fs/vault.py|d2e3a2cf6b3b2699a0e61a12aec7b2c3bdc59eb23c2a282ade756f5cb8e1bb95|n/a: parameterized queries with ? placeholders
+sql-injection|fs/vault.py|da957f72f27c5dcbebb6da5d89ba68e7a7c62f247000cef53059c580d1b56487|n/a: parameterized queries with ? placeholders
+sql-injection|fs/vault.py|f8e3ea8124fd2776903e0df0b37566895a8797f60c92219c741e44376af939ba|n/a: uses parameterized queries with ? placeholders
+tar-slip|bin/sandbox.py|4dc1da4e83c3db423ef3d3d36907ae18a8c3d30fe00bdbe511348b16c7eb887f|n/a: tar entries from vault (SQLite) paths, not user-supplied input
+tar-slip|bin/sandbox.py|85c9b9a149b00da28393bbacdd23661f7586e546f36a4e5f58cfc46ed69425cc|n/a: tar entries built from vault paths (SQLite), not untrusted user input
+tar-slip|bin/sandbox.py|85e3604fd76ef86384062b1f021955d6e41ca66649eb97a179390d7a48096680|n/a: tar entries from vault (SQLite) paths, not user-supplied input
+tar-slip|bin/sandbox.py|90620ead99d65a0d973429e91f91c8f7ddb8b5bc885dc97c4472be5b76fdb837|n/a: controlled Docker volume operations
+tar-slip|bin/sandbox.py|a0c1aa4080c4ec13a16b02ed6ef8fbaeef6866a5ca30bb82e7d366f06718ab76|n/a: filename is hardcoded AGENTSseaweed ignore add --scan "$SCAN" 11:n/a:
+tar-slip|bin/sandbox.py|e0b6cfbb3907d2d4f4eb9e3b6284432f9ad11e48dc1add3818aeac6c507fada1|n/a: controlled Docker volume tar export/import, not user-supplied tar
+tar-slip|bin/sandbox.py|ecb7e4bf996fdcc79d925d7872ed63b0af22d1e791dd4c72b5098b16d5373cd7|n/a: tar entries from vault (SQLite) paths, not user-supplied input
+tar-slip|system/crond.py|03fa009fe82a1565be8aba7ed24ad14af21c166a859746365fbcd1428f72976c|n/a: reads from vault, no tar extraction
+tar-slip|system/crond.py|3f7437bf013029cff725b5e4bbc2150702ca5cc0fbc146fbe1319408fe50b10d|n/a: reads vault paths, no tar operations
+tar-slip|tests/test_access.py|67b6148bb60be73c688e996b029cf3335415fc7dcf297dfdaa51292e467647f6|n/a: test fixture
+tar-slip|tests/test_access.py|7a8307a3fcbfd658cd6255bff70ea7abfe130f6989163824d6736aa2eccf80e9|n/a: test fixture
+tar-slip|tests/test_sandbox.py|4727a91306444bef7ea951b14cd5baca4c8d3ccfe1fa92bc332df6b4f7d076ad|n/a: test fixture
+tar-slip|tests/test_sandbox.py|4aa279d3c78706aefccc3c3efcd4a894b9a12cf35a7fe3c50aebe55e34a846a4|n/a: test fixture
+tar-slip|tests/test_sandbox.py|65e3395eeb9ee62651f455ef40ceac822825f164029eaa413a62cb453584c87c|n/a: test fixture
+tar-slip|tests/test_sandbox.py|7e04ff057eacf22316b9359b45782a9c4c04cb9c500fca97cb87b5eca9f55d9a|n/a: test fixture
+tar-slip|tests/test_sandbox.py|c1f58760087108a0740974a28a34ba203579a4d3aa82d267d08336b689f99c85|n/a: test fixture
+weak-password-hash|bin/web.py|5215e35a418dd9122a7fd3594b7b2bde1a47aefe2f8b35984a8f06f8383d5a67|n/a: uses bcrypt.checkpw — strong password hash
+weak-password-hash|bin/web.py|655fa2f4d6307169f02bcaa5f992cd6a8c9fcd1f926c66d6adfdf478b80698d2|n/a: uses bcrypt for password hashing
+weak-password-hash|bin/web.py|7da4ec230038e0c272499c9502ee1f93804a01f952a01094785c6abf19a48c93|n/a: uses bcrypt.hashpw with gensalt — strong password hash
+weak-password-hash|bin/web.py|bfcdaff904fbb6c3f2c7b85c355331ccfb7f8a5dc761c781b568005dda8fcda2|n/a: uses bcrypt — strong password hash
+weak-prng|bin/web.py|5305d8e30eab|n/a: uses secrets.token_urlsafe(32) which is cryptographically secure

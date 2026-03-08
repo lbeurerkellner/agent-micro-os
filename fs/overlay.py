@@ -243,6 +243,9 @@ class OverlayFS:
             raise PermissionError(f"Cannot remove directory from read-only mount: {path}")
         self._vault.rmdir(path)
 
+    def list_dirs(self, prefix: str = "") -> list[str]:
+        return self._vault.list_dirs(prefix)
+
     def _has_dir_marker(self, path: str) -> bool:
         return self._vault._has_dir_marker(path)
 

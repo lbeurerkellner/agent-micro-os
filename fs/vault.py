@@ -72,6 +72,7 @@ class Vault:
         self._current_commit_id: Optional[str] = None  # Track active commit
         self._pending_writes: dict[str, tuple[bytes, str, Optional[str]]] = {}  # filepath -> (content, author, base_hash)
         self._pending_deletes: dict[str, Optional[str]] = {}  # filepath -> base_hash
+        self._pending_dirs: set[str] = set()  # dir paths to create on commit
         self._init_db()
 
     def _init_db(self):
@@ -164,6 +165,10 @@ class Vault:
         if not filepath:
             raise ValueError("Filepath cannot be empty")
 
+        # Reject writing a file at a path that is a directory
+        if self.is_dir(filepath):
+            raise ValueError(f"'{filepath}' is a directory")
+
         # Use vault's user as default author
         if author is None:
             author = self.user
@@ -250,6 +255,10 @@ class Vault:
 
     def _has_dir_marker(self, path: str) -> bool:
         """Check if an explicit directory marker exists for *path*."""
+        # Check pending dirs first (transactional mkdir during commit)
+        if self._current_commit_id is not None and path in self._pending_dirs:
+            return True
+
         conn = sqlite3.connect(self.filename)
         cursor = conn.cursor()
         cursor.execute(
@@ -278,6 +287,58 @@ class Vault:
         dirs.sort(key=lambda d: d.count("/"), reverse=True)
         return dirs
 
+    def list_dirs(self, prefix: str = "") -> list[str]:
+        """Return direct child directory names under *prefix*.
+
+        Only returns explicit directories created with :meth:`mkdir`
+        (or auto-created by :meth:`write`).  Does not return virtual
+        directories inferred from file paths — those are already
+        discoverable via :meth:`list`.
+
+        :param prefix: Parent directory path (empty string for root)
+        :return: Sorted list of child directory names (not full paths)
+        """
+        prefix = prefix.strip("/")
+        conn = sqlite3.connect(self.filename)
+        cursor = conn.cursor()
+
+        if prefix:
+            cursor.execute(
+                """SELECT DISTINCT filepath FROM versions
+                   WHERE user = ? AND hash = 'directory'
+                   AND filepath LIKE ?""",
+                (self.user, prefix + "/%"),
+            )
+        else:
+            cursor.execute(
+                """SELECT DISTINCT filepath FROM versions
+                   WHERE user = ? AND hash = 'directory'""",
+                (self.user,),
+            )
+
+        names: set[str] = set()
+        for (fp,) in cursor.fetchall():
+            # Get relative path from prefix
+            rel = fp[len(prefix) + 1:] if prefix else fp
+            # Only direct children (first component)
+            child = rel.split("/")[0]
+            if child:
+                names.add(child)
+
+        conn.close()
+        return sorted(names)
+
+    def _remove_dir_marker(self, path: str):
+        """Remove a directory marker unconditionally (no empty-check)."""
+        conn = sqlite3.connect(self.filename)
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM versions WHERE user = ? AND filepath = ? AND hash = 'directory'",
+            (self.user, path),
+        )
+        conn.commit()
+        conn.close()
+
     def mkdir(self, path: str, author: Optional[str] = None):
         """Create an explicit directory.
 
@@ -304,7 +365,18 @@ class Vault:
         parts = path.split("/")
         paths_to_create = []
         for i in range(1, len(parts) + 1):
-            paths_to_create.append("/".join(parts[:i]))
+            dir_path = "/".join(parts[:i])
+            # Also reject if a file exists at a parent path
+            if dir_path != path and dir_path in files:
+                raise ValueError(f"'{dir_path}' exists as a file")
+            paths_to_create.append(dir_path)
+
+        # If in a commit, batch the directory creation
+        if self._current_commit_id is not None:
+            for dir_path in paths_to_create:
+                if not self._has_dir_marker(dir_path):
+                    self._pending_dirs.add(dir_path)
+            return
 
         conn = sqlite3.connect(self.filename)
         cursor = conn.cursor()
@@ -319,11 +391,6 @@ class Vault:
             )
             if cursor.fetchone() is not None:
                 continue
-
-            # Also reject if a file exists at a parent path
-            if dir_path != path and dir_path in files:
-                conn.close()
-                raise ValueError(f"'{dir_path}' exists as a file")
 
             version_id = str(uuid.uuid4()).lower()
             cursor.execute(
@@ -453,12 +520,13 @@ class Vault:
         conn = sqlite3.connect(self.filename)
         cursor = conn.cursor()
 
-        # Build optional prefix filter
+        # Build optional prefix filter (directory-scoped: match exact or under prefix/)
         prefix_clause = ""
         params: list = [self.user]
         if prefix:
-            prefix_clause = " AND filepath LIKE ?"
-            params.append(prefix + "%")
+            prefix_clause = " AND (filepath = ? OR filepath LIKE ?)"
+            params.append(prefix)
+            params.append(prefix + "/%")
 
         order = "ORDER BY id DESC" if sort_by_recent else ""
         cursor.execute(
@@ -508,8 +576,9 @@ class Vault:
         prefix_clause = ""
         params: list = [self.user]
         if prefix:
-            prefix_clause = " AND filepath LIKE ?"
-            params.append(prefix + "%")
+            prefix_clause = " AND (filepath = ? OR filepath LIKE ?)"
+            params.append(prefix)
+            params.append(prefix + "/%")
 
         order = "ORDER BY id DESC" if sort_by_recent else ""
         cursor.execute(
@@ -710,10 +779,12 @@ class Vault:
             self.write(dst, content)
             return
 
-        # Check if src is a virtual directory
+        # Check if src is a directory (virtual or explicit)
         prefix = src + '/'
         matched = [f for f in files if f.startswith(prefix)]
-        if not matched:
+        dir_markers = self._list_dir_markers(src)
+
+        if not matched and not dir_markers:
             raise FileNotFoundError(f"File '{src}' not found in vault for user '{self.user}'")
 
         # Directory copy: copy each file under src to dst
@@ -721,6 +792,12 @@ class Vault:
             rel = filepath[len(prefix):]
             content = self.read(filepath)
             self.write(dst + '/' + rel, content)
+
+        # Copy directory markers
+        for dir_path in dir_markers:
+            rel = dir_path[len(src):]  # includes leading /
+            new_dir = dst + rel if rel else dst
+            self.mkdir(new_dir)
 
     def move(self, src: str, dst: str):
         """Move (rename) a file or directory to a new path.
@@ -750,10 +827,12 @@ class Vault:
             self.delete(src)
             return
 
-        # Check if src is a virtual directory
+        # Check if src is a directory (virtual or explicit)
         prefix = src + '/'
         matched = [f for f in files if f.startswith(prefix)]
-        if not matched:
+        dir_markers = self._list_dir_markers(src)
+
+        if not matched and not dir_markers:
             raise FileNotFoundError(f"File '{src}' not found in vault for user '{self.user}'")
 
         # Directory move: copy each file, then delete originals
@@ -764,6 +843,17 @@ class Vault:
 
         for filepath in matched:
             self.delete(filepath)
+
+        # Move directory markers (deepest first to avoid non-empty checks)
+        for dir_path in dir_markers:
+            rel = dir_path[len(src):]  # includes leading /
+            new_dir = dst + rel if rel else dst
+            self.mkdir(new_dir)
+
+        # Remove old directory markers (deepest first)
+        for dir_path in dir_markers:
+            # Check if it's now empty (files already moved, children already recreated)
+            self._remove_dir_marker(dir_path)
 
     def delete(self, filepath: str):
         """Delete a file from the vault.
@@ -776,9 +866,9 @@ class Vault:
         # Normalize filepath: strip leading/trailing slashes
         filepath = filepath.strip('/')
 
-        # Prevent deleting directories that have content
+        # Prevent deleting directories — use rmdir instead
         if self.is_dir(filepath):
-            raise ValueError(f"Directory '{filepath}' is not empty")
+            raise ValueError(f"'{filepath}' is a directory")
 
         # If in a commit, batch the deletion
         if self._current_commit_id is not None:
@@ -842,6 +932,7 @@ class Vault:
             self._current_commit_id = None
             self._pending_writes.clear()
             self._pending_deletes.clear()
+            self._pending_dirs.clear()
             raise ValueError("Cannot create empty commit: no changes made")
 
         # Use vault's user as default author
@@ -867,6 +958,7 @@ class Vault:
                 self._current_commit_id = None
                 self._pending_writes.clear()
                 self._pending_deletes.clear()
+                self._pending_dirs.clear()
                 raise ValueError(
                     f"Conflict detected: '{filepath}' was modified by another process. "
                     f"Please refresh and retry your changes."
@@ -888,12 +980,29 @@ class Vault:
                 self._current_commit_id = None
                 self._pending_writes.clear()
                 self._pending_deletes.clear()
+                self._pending_dirs.clear()
                 raise ValueError(
                     f"Conflict detected: '{filepath}' was modified by another process. "
                     f"Please refresh and retry your changes."
                 )
 
         # No conflicts, proceed with commit
+
+        # Apply all pending directory markers
+        for dir_path in sorted(self._pending_dirs):
+            # Skip if marker already exists in DB
+            cursor.execute(
+                """SELECT 1 FROM versions
+                   WHERE user = ? AND filepath = ? AND hash = 'directory'
+                   ORDER BY id DESC LIMIT 1""",
+                (self.user, dir_path),
+            )
+            if cursor.fetchone() is None:
+                version_id = str(uuid.uuid4()).lower()
+                cursor.execute(
+                    "INSERT INTO versions (version_id, user, filepath, content, hash, author) VALUES (?, ?, ?, ?, ?, ?)",
+                    (version_id, self.user, dir_path, b"", "directory", author),
+                )
 
         # Apply all pending writes
         for filepath, (content, write_author, _) in self._pending_writes.items():
@@ -930,6 +1039,7 @@ class Vault:
         self._current_commit_id = None
         self._pending_writes.clear()
         self._pending_deletes.clear()
+        self._pending_dirs.clear()
 
     def commit_log(self) -> list[Commit]:
         """List all commits for the current user.

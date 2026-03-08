@@ -228,6 +228,11 @@ def get_path_completions(text: str, cwd: str, vault):
             # Direct file in current directory
             entries.add(rel_path)
 
+    # Include explicit directories (created with mkdir) that have no files yet
+    for dir_name in vault.list_dirs(prefix=current_dir):
+        if dir_name + '/' not in entries:
+            entries.add(dir_name + '/')
+
     # Filter entries that match the partial filename
     matches = [e for e in entries if e.startswith(file_part)]
 
