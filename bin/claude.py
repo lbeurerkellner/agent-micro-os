@@ -30,9 +30,9 @@ _IGNORE_GLOBS = [
 def _build_cap_script(env: dict):
     """Generate a .cap.sh script for running Claude Code.
 
-    Environment variables are baked into the script body because cap only
-    injects ``secrets`` as ``-e`` flags to Docker — arbitrary env vars set
-    on the cap subprocess do not reach the container.
+    Environment variables are baked into the script body because cap injects
+    only ``secrets`` as ``-e`` flags to Docker — arbitrary env vars set on the
+    host do not reach the container.
     """
     env_lines = "\n".join(f"export {k}={shlex.quote(v)}" for k, v in env.items())
     return f"""\
@@ -40,7 +40,7 @@ def _build_cap_script(env: dict):
 # ---
 # name: claude-agent
 # description: Claude Code agent
-# dependencies: ['npm:@anthropic-ai/claude-code']
+# dependencies: ['npm:@anthropic-ai/claude-code', 'apt:gh', 'apt:jq', 'apt:ripgrep', 'apt:git', 'apt:less']
 # access: ['**:rw']
 # network: '*'
 # user: 1000
@@ -75,7 +75,6 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, access=None)
              ANTHROPIC_API_KEY is forwarded automatically when set in the host env.
         readonly: If True, do not commit changes back to the vault.
     """
-    import asyncio
     import shutil
     import tempfile
 
@@ -85,6 +84,7 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, access=None)
         _diff_from_dir,
         _export_to_dir,
     )
+    from cap import run_script as cap_run_content
     from fs.vault import Vault
     from system.context import SystemContext
 
@@ -127,46 +127,34 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, access=None)
     tmpdir = tempfile.mkdtemp(prefix="vault-claude-")
     _export_to_dir(snapshot, tmpdir)
 
-    # Write the cap script to a stable temp location
-    cap_dir = os.path.join(tempfile.gettempdir(), "cap-vault")
-    os.makedirs(cap_dir, exist_ok=True)
-    cap_path = os.path.join(cap_dir, "claude-agent.cap.sh")
-    with open(cap_path, "w") as f:
-        f.write(_build_cap_script(container_env))
-
-    # Build the claude command to pass as args to the cap script
-    cap_cmd = ["cap", "--quiet", cap_path]
-    cap_cmd.extend(claude_args)
-
     # Register as an active process so it shows up in top
     call_id = uuid.uuid4().hex[:8]
     prompt_summary = " ".join(claude_args)[:60] if claude_args else ""
     ctx.register_agent(call_id, f"claude: {prompt_summary}", "")
 
     try:
-        if ctx.interactive:
-            proc = await asyncio.create_subprocess_exec(
-                *cap_cmd, cwd=tmpdir,
-            )
-            await proc.wait()
-        else:
-            proc = await asyncio.create_subprocess_exec(
-                *cap_cmd, cwd=tmpdir,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
-            output = stdout.decode() + stderr.decode()
-            if not quiet:
-                cprint(output.strip())
+        # Run via cap's programmatic API — no subprocess needed
+        result = cap_run_content(
+            _build_cap_script(container_env),
+            claude_args,
+            cwd=tmpdir,
+            interactive=ctx.interactive,
+            capture=tool_use_mode,
+            quiet_sync=True,
+        )
+
+        output = result.stdout + result.stderr
+
+        if not quiet and output.strip():
+            cprint(output.strip())
 
         # Diff and commit changes back with no-version semantics
         if readonly:
             if not quiet:
                 cprint("Discarding changes (--readonly mode).")
             if tool_use_mode:
-                return f"{output}\n[exit code: {proc.returncode}]"
-            return proc.returncode == 0
+                return f"{output}\n[exit code: {result.returncode}]"
+            return result.returncode == 0
 
         vault_prefix = (prefix.strip("/") + "/") if prefix.strip("/") else ""
         current = _diff_from_dir(tmpdir, snapshot)
@@ -178,12 +166,10 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, access=None)
         )
 
         if tool_use_mode:
-            return f"{output}\n[exit code: {proc.returncode}]"
-        return proc.returncode == 0
+            return f"{output}\n[exit code: {result.returncode}]"
+        return result.returncode == 0
     except Exception as e:
         cprint(f"Error running claude: {str(e)}", file=ctx.stderr)
     finally:
         ctx.unregister_agent(call_id)
         shutil.rmtree(tmpdir, ignore_errors=True)
-        if os.path.exists(cap_path):
-            os.unlink(cap_path)

@@ -138,7 +138,6 @@ def _build_cap_snapshot(fs, access, args, cwd):
 
 async def _run_cap_tool(ctx, filepath, contents, *args):
     """Run a cap-frontmatter tool by exporting the vault and invoking ``cap``."""
-    import asyncio
     import os
     import shutil
     import tempfile
@@ -148,6 +147,7 @@ async def _run_cap_tool(ctx, filepath, contents, *args):
         _diff_from_dir,
         _export_to_dir,
     )
+    from cap import run_script as cap_run_content
     from fs.vault import Vault
 
     from system.tools import parse_cap_meta
@@ -169,49 +169,31 @@ async def _run_cap_tool(ctx, filepath, contents, *args):
     tmpdir = tempfile.mkdtemp(prefix="vault-cap-")
     _export_to_dir(snapshot, tmpdir)
 
-    # Write the tool as a .cap.py file with a stable name so cap's
-    # image tags (which include the tool name) are consistent across runs.
-    tool_name = filepath.rsplit("/", 1)[-1] if "/" in filepath else filepath
-    cap_dir = os.path.join(tempfile.gettempdir(), "cap-vault")
-    os.makedirs(cap_dir, exist_ok=True)
-    lang = meta.get("lang", "python")
-    ext_map = {"python": ".cap.py", "js": ".cap.js", "sh": ".cap.sh"}
-    cap_ext = ext_map.get(lang, ".cap.py")
-    cap_path = os.path.join(cap_dir, f"{tool_name}{cap_ext}")
-
     # Strip leading "/" from access paths so cap sees them as relative
     # to its workspace root.
     if any(e.startswith("/") for e in access):
         normed = [e.lstrip("/") for e in access]
         contents = contents.replace(repr(access), repr(normed))
 
-    with open(cap_path, "w") as f:
-        f.write(contents)
+    # Derive a stable tool name from the filepath for consistent image tags.
+    tool_name = filepath.rsplit("/", 1)[-1] if "/" in filepath else filepath
 
     try:
-        cmd = ["cap", "--quiet", cap_path]
-        cmd.extend(rewritten_args)
+        result = cap_run_content(
+            contents,
+            rewritten_args,
+            name=tool_name,
+            cwd=tmpdir,
+            interactive=ctx.interactive,
+            capture=not ctx.interactive,
+            quiet_sync=True,
+        )
 
-        interactive = ctx.interactive
-
-        if interactive:
-            # Let cap inherit the terminal for interactive tools (shells, REPLs)
-            proc = await asyncio.create_subprocess_exec(*cmd, cwd=tmpdir)
-            await proc.wait()
-        else:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                cwd=tmpdir,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
-            tool_output = stdout.decode().strip()
-            if tool_output:
-                cprint(tool_output)
-            err = stderr.decode().strip()
-            if err:
-                cprint(err, file=ctx.stderr)
+        if not ctx.interactive:
+            if result.stdout.strip():
+                cprint(result.stdout.strip())
+            if result.stderr.strip():
+                cprint(result.stderr.strip(), file=ctx.stderr)
 
         # Diff and commit changes back — no prefix since snapshot paths
         # are already vault-root-relative.
@@ -221,6 +203,5 @@ async def _run_cap_tool(ctx, filepath, contents, *args):
         cprint(f"Error running cap tool {filepath}: {str(e)}", file=ctx.stderr)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
-        os.unlink(cap_path)
 
 

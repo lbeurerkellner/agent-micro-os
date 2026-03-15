@@ -11,12 +11,13 @@ Commands:
   cap secrets set <tool> <KEY>    Overwrite a stored secret
   cap secrets remove <tool> <KEY> Delete a stored secret
   cap --build <script> [args...]  Force-rebuild Docker images before running
+  cap --verbose <script> [args...] Show Docker build output instead of spinner
 
 Cap file format (.cap.py / .cap.js / .cap.sh):
   # ---
   # name: my-tool
   # description: What this tool does
-  # dependencies: ['pypi:requests', 'npm:lodash']
+  # dependencies: ['pypi:requests', 'npm:lodash', 'apt:ffmpeg']
   # access: ['data/**', '$@']   # files/dirs to mount into /workspace
   # network: ['api.example.com'] # outbound allowlist (or 'disable' / '*')
   # secrets: ['API_KEY']         # secrets injected as env vars at runtime
@@ -43,16 +44,55 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 # Bump when image build structure changes to invalidate cached final images.
 _IMAGE_FORMAT_VERSION = "3"
 
 
+@dataclass
+class RunResult:
+    """Result of running a cap tool."""
+    returncode: int = 0
+    stdout: str = ""
+    stderr: str = ""
+
+
 def _status(*args, **kwargs):
     """Print cap status/progress messages to stderr, keeping stdout clean for tool output."""
     kwargs.setdefault("file", sys.stderr)
     print(*args, **kwargs)
+
+
+import threading
+
+class _Spinner:
+    """A simple threaded spinner for long-running operations."""
+    _CHARS = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def __init__(self, message: str):
+        self._message = message
+        self._stop = threading.Event()
+        self._thread = None
+
+    def __enter__(self):
+        self._thread = threading.Thread(target=self._spin, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        self._thread.join()
+        sys.stderr.write("\r\033[K")
+        sys.stderr.flush()
+
+    def _spin(self):
+        i = 0
+        while not self._stop.wait(0.08):
+            sys.stderr.write(f"\r{self._CHARS[i % len(self._CHARS)]} {self._message}")
+            sys.stderr.flush()
+            i += 1
 
 _FILTER_ADDON = """\
 import fnmatch, json, os, re, time
@@ -227,14 +267,18 @@ def image_exists(tag: str) -> bool:
 
 
 def build_deps_image(name: str, dependencies: list, tag: str, platform: str = None,
-                     ca_cert_path: str = None, user: str = None):
+                     ca_cert_path: str = None, user: str = None, verbose: bool = False):
+    _VALID_PREFIXES = ("pypi:", "npm:", "apt:")
+    unknown = [d for d in dependencies if not any(d.startswith(p) for p in _VALID_PREFIXES)]
+    if unknown:
+        raise ValueError(f"cap: unsupported dependency type '{unknown}'  (supported: {', '.join(_VALID_PREFIXES)})")
+
+    apt = [d[4:] for d in dependencies if d.startswith("apt:")]
     pypi = [d[5:] for d in dependencies if d.startswith("pypi:")]
     npm = [d[4:] for d in dependencies if d.startswith("npm:")]
 
     dockerfile_lines = [
         "FROM python:3.12-slim",
-        # Install vim
-        "RUN apt-get update && apt-get install -y vim && rm -rf /var/lib/apt/lists/*",
         # Install uv + current Node.js LTS in one layer
         "RUN apt-get update && apt-get install -y curl ca-certificates && \\",
         "    curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && \\",
@@ -249,6 +293,10 @@ def build_deps_image(name: str, dependencies: list, tag: str, platform: str = No
     if user:
         dockerfile_lines.append(
             f'RUN useradd -m -u {user} -s /bin/sh capuser'
+        )
+    if apt:
+        dockerfile_lines.append(
+            f'RUN apt-get update && apt-get install -y --no-install-recommends {" ".join(apt)} && rm -rf /var/lib/apt/lists/*'
         )
     if pypi:
         dockerfile_lines.append(f'RUN uv pip install {" ".join(pypi)}')
@@ -266,22 +314,35 @@ def build_deps_image(name: str, dependencies: list, tag: str, platform: str = No
 
     dockerfile = "\n".join(dockerfile_lines) + "\n"
     platform_args = ["--platform", platform] if platform else []
-    _status(f"Building deps image {tag} ...")
+    capture = {} if verbose else {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+    if verbose:
+        _status(f"Building deps image {tag} ...")
     if ca_cert_path:
         with tempfile.TemporaryDirectory() as tmp:
             Path(tmp, "Dockerfile").write_text(dockerfile)
             shutil.copy2(ca_cert_path, os.path.join(tmp, "cap-ca.crt"))
-            subprocess.run(["docker", "build", *platform_args, "-t", tag, tmp], check=True)
+            if verbose:
+                subprocess.run(["docker", "build", *platform_args, "-t", tag, tmp], check=True)
+            else:
+                with _Spinner("Installing dependencies..."):
+                    subprocess.run(["docker", "build", *platform_args, "-t", tag, tmp],
+                                   check=True, **capture)
     else:
-        # No COPY needed — stream the Dockerfile via stdin (no build context)
-        subprocess.run(
-            ["docker", "build", *platform_args, "-t", tag, "-"],
-            input=dockerfile.encode(),
-            check=True,
-        )
+        if verbose:
+            subprocess.run(
+                ["docker", "build", *platform_args, "-t", tag, "-"],
+                input=dockerfile.encode(), check=True,
+            )
+        else:
+            with _Spinner("Installing dependencies..."):
+                subprocess.run(
+                    ["docker", "build", *platform_args, "-t", tag, "-"],
+                    input=dockerfile.encode(), check=True, **capture,
+                )
 
 
-def build_final_image(deps_tag: str, body: str, lang: str, tag: str, platform: str = None):
+def build_final_image(deps_tag: str, body: str, lang: str, tag: str, platform: str = None,
+                      verbose: bool = False):
     if lang == "python":
         script_file = "cli.py"
         entrypoint = '["python3", "/app/cli.py"]'
@@ -301,11 +362,17 @@ def build_final_image(deps_tag: str, body: str, lang: str, tag: str, platform: s
         f"ENTRYPOINT {entrypoint}\n"
     )
     platform_args = ["--platform", platform] if platform else []
+    capture = {} if verbose else {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
     with tempfile.TemporaryDirectory() as tmp:
         Path(tmp, script_file).write_text(body)
         Path(tmp, "Dockerfile").write_text(dockerfile)
-        _status(f"Building final image {tag} ...")
-        subprocess.run(["docker", "build", *platform_args, "-t", tag, tmp], check=True)
+        if verbose:
+            _status(f"Building final image {tag} ...")
+            subprocess.run(["docker", "build", *platform_args, "-t", tag, tmp], check=True)
+        else:
+            with _Spinner("Preparing sandbox..."):
+                subprocess.run(["docker", "build", *platform_args, "-t", tag, tmp],
+                               check=True, **capture)
 
 
 def _file_hash(path):
@@ -918,20 +985,190 @@ def _cmd_secrets(sub_args: list):
     sys.exit(1)
 
 
-def main():
-    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+def _run_tool(meta, body, extra_args, *, cwd=None, force_build=False,
+              verbose=False, quiet_sync=False, interactive=None,
+              capture=False, script_path=None):
+    """Core logic for running a cap tool. Returns a RunResult.
+
+    This is the shared implementation for the programmatic API and the CLI.
+
+    Args:
+        meta: Parsed frontmatter dict.
+        body: Script body text.
+        extra_args: Arguments to pass to the tool.
+        cwd: Working directory for workspace resolution (default: os.getcwd()).
+        force_build: Force-rebuild Docker images.
+        verbose: Show Docker build output instead of spinner.
+        quiet_sync: Suppress workspace sync output.
+        interactive: If True, inherit terminal for docker run. If False,
+            capture stdout/stderr. None auto-detects from tty.
+        capture: If True, capture docker run stdout/stderr into RunResult.
+            Ignored when interactive=True.
+        script_path: Path to the original script file (for secret prompts).
+    """
+    name = meta["name"]
+    lang = meta["lang"]
+    deps = meta["dependencies"]
+    platform = meta["platform"]
+    access = meta["access"]
+    network = meta["network"]
+    secrets = meta["secrets"]
+    user = meta.get("user")
+    cwd = cwd or os.getcwd()
+
+    # --- Image build -------------------------------------------------------
+    ca_cert_path = None
+    if isinstance(network, list):
+        _, ca_cert_path = ensure_ca()
+
+    ca_cert_hash = _file_hash(ca_cert_path) if ca_cert_path else None
+    deps_hash, full_hash = compute_hashes(deps, body, platform=platform,
+                                          ca_cert_hash=ca_cert_hash, secrets=secrets,
+                                          user=user)
+    deps_tag = f"cap-{name}-deps:{deps_hash}"
+    final_tag = f"cap-{name}:{full_hash}"
+
+    if force_build or not image_exists(final_tag):
+        if force_build or not image_exists(deps_tag):
+            build_deps_image(name, deps, deps_tag, platform=platform, ca_cert_path=ca_cert_path,
+                             user=user, verbose=verbose)
+        build_final_image(deps_tag, body, lang, final_tag, platform=platform, verbose=verbose)
+
+    # --- Secrets -----------------------------------------------------------
+    secret_values = resolve_secrets(name, full_hash, secrets, script_path=script_path)
+    secret_env_args = [arg for k, v in secret_values.items() for arg in ("-e", f"{k}={v}")]
+
+    # --- Workspace ---------------------------------------------------------
+    workspace_tmp, container_args, ws_info = build_workspace(access, extra_args or [], cwd)
+
+    # --- Network policy ----------------------------------------------------
+    proxy_proc = None
+    proxy_tmpfiles = []
+    network_args = []
+    net_log_path = None
+
+    if network == "disable":
+        network_args = ["--network", "none"]
+    elif isinstance(network, list):
+        ca_dir, _ = ensure_ca()
+        port, proxy_proc, proxy_tmpfiles, net_log_path = start_proxy(ca_dir, patterns=network)
+        proxy_url = f"http://host.docker.internal:{port}"
+        network_args = [
+            "--add-host", "host.docker.internal:host-gateway",
+            "-e", f"HTTP_PROXY={proxy_url}",
+            "-e", f"HTTPS_PROXY={proxy_url}",
+            "-e", f"http_proxy={proxy_url}",
+            "-e", f"https_proxy={proxy_url}",
+        ]
+
+    # --- Docker run --------------------------------------------------------
+    if interactive is None:
+        interactive = sys.stdin.isatty()
+
+    tty = ["-it"] if interactive else ["-i"]
+    platform_args = ["--platform", platform] if platform else []
+    workspace_mount = ["-v", f"{workspace_tmp}:/workspace"]
+    home_dir = "/home/capuser" if user else "/root"
+    home_volume_args = ["-v", f"cap-{name}-home:{home_dir}"] if meta["stateful"] else []
+    user_args = ["--user", f"{user}:{user}"] if user else []
+
+    docker_cmd = [
+        "docker", "run", "--rm", *tty, *platform_args,
+        *user_args,
+        *workspace_mount, *home_volume_args, "-w", "/workspace", *network_args,
+        *secret_env_args, final_tag, *container_args,
+    ]
+
+    try:
+        if capture and not interactive:
+            result = subprocess.run(docker_cmd, capture_output=True)
+        else:
+            result = subprocess.run(docker_cmd)
+
+        if workspace_tmp and ws_info:
+            sync_workspace(workspace_tmp, ws_info, cwd, quiet=quiet_sync)
+        if net_log_path:
+            print_network_log(net_log_path)
+
+        return RunResult(
+            returncode=result.returncode,
+            stdout=result.stdout.decode() if result.stdout else "",
+            stderr=result.stderr.decode() if result.stderr else "",
+        )
+    finally:
+        if workspace_tmp:
+            shutil.rmtree(workspace_tmp, ignore_errors=True)
+        if proxy_proc:
+            proxy_proc.terminate()
+            proxy_proc.wait(timeout=5)
+        for f in proxy_tmpfiles:
+            os.unlink(f)
+
+
+# ---------------------------------------------------------------------------
+# Programmatic API
+# ---------------------------------------------------------------------------
+
+def run(script_path: str, extra_args: list = None, **kwargs) -> RunResult:
+    """Run a cap tool from a script file.
+
+    Returns a RunResult with returncode, stdout, and stderr.
+    Keyword arguments are forwarded to ``_run_tool`` (see its docstring
+    for ``cwd``, ``force_build``, ``verbose``, ``interactive``, ``capture``,
+    ``quiet_sync``).
+    """
+    meta, body = parse_file(script_path)
+    kwargs.setdefault("script_path", script_path)
+    return _run_tool(meta, body, extra_args, **kwargs)
+
+
+def run_script(content: str, extra_args: list = None, *,
+                name: str = None, lang: str = None, **kwargs) -> RunResult:
+    """Run a cap tool from inline script content (no file on disk needed).
+
+    The *content* string should include the frontmatter block.  An optional
+    *name* overrides the tool name (used for image tags and stateful volumes).
+    *lang* overrides language detection (``"python"``, ``"js"``, ``"sh"``).
+
+    Returns a RunResult with returncode, stdout, and stderr.
+    Keyword arguments are forwarded to ``_run_tool``.
+    """
+    detected_lang = lang or ("js" if content.lstrip().startswith("//") else
+                             "sh" if "runtime: shell" in content or "runtime: sh" in content
+                             else "python")
+    meta, body = parse_content(content, lang=detected_lang)
+    if name:
+        meta["name"] = name
+    if not meta["name"]:
+        meta["name"] = "inline-tool"
+    return _run_tool(meta, body, extra_args, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
+def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+
+    if not argv or argv[0] in ("-h", "--help"):
         print(__doc__)
         sys.exit(0)
 
     force_build = False
     quiet_sync = False
-    args = sys.argv[1:]
+    verbose = False
+    args = list(argv)
     while args and args[0].startswith("--"):
         if args[0] == "--build":
             force_build = True
             args = args[1:]
         elif args[0] == "--quiet":
             quiet_sync = True
+            args = args[1:]
+        elif args[0] == "--verbose":
+            verbose = True
             args = args[1:]
         else:
             break
@@ -982,91 +1219,8 @@ def main():
             sys.exit(1)
         script_path = resolved
 
-    meta, body = parse_file(script_path)
-    name = meta["name"]
-    lang = meta["lang"]
-    deps = meta["dependencies"]
-    platform = meta["platform"]
-    access = meta["access"]
-    network = meta["network"]
-    secrets = meta["secrets"]
-    user = meta.get("user")
-
-    # Resolve CA cert path before hashing so cert changes invalidate the deps image.
-    ca_cert_path = None
-    if isinstance(network, list):
-        _, ca_cert_path = ensure_ca()
-
-    ca_cert_hash = _file_hash(ca_cert_path) if ca_cert_path else None
-    deps_hash, full_hash = compute_hashes(deps, body, platform=platform,
-                                          ca_cert_hash=ca_cert_hash, secrets=secrets,
-                                          user=user)
-    deps_tag = f"cap-{name}-deps:{deps_hash}"
-    final_tag = f"cap-{name}:{full_hash}"
-
-    if force_build or not image_exists(final_tag):
-        if force_build or not image_exists(deps_tag):
-            build_deps_image(name, deps, deps_tag, platform=platform, ca_cert_path=ca_cert_path,
-                             user=user)
-        build_final_image(deps_tag, body, lang, final_tag, platform=platform)
-
-    # Resolve secrets before entering the network/proxy setup so the user is
-    # prompted (if needed) before any long-running setup happens.
-    secret_values = resolve_secrets(name, full_hash, secrets, script_path=script_path)
-    secret_env_args = [arg for k, v in secret_values.items() for arg in ("-e", f"{k}={v}")]
-
-    cwd = os.getcwd()
-    workspace_tmp, container_args, ws_info = build_workspace(access, extra_args, cwd)
-
-    # --- Network policy ---------------------------------------------------
-    proxy_proc = None
-    proxy_tmpfiles = []
-    network_args = []
-    net_log_path = None
-
-    if network == "disable":
-        network_args = ["--network", "none"]
-    elif isinstance(network, list):
-        ca_dir, _ = ensure_ca()
-        port, proxy_proc, proxy_tmpfiles, net_log_path = start_proxy(ca_dir, patterns=network)
-        proxy_url = f"http://host.docker.internal:{port}"
-        network_args = [
-            "--add-host", "host.docker.internal:host-gateway",
-            "-e", f"HTTP_PROXY={proxy_url}",
-            "-e", f"HTTPS_PROXY={proxy_url}",
-            "-e", f"http_proxy={proxy_url}",
-            "-e", f"https_proxy={proxy_url}",
-        ]
-    # else: network == "*" → unrestricted
-
-    tty = ["-it"] if sys.stdin.isatty() else ["-i"]
-    platform_args = ["--platform", platform] if platform else []
-    workspace_mount = ["-v", f"{workspace_tmp}:/workspace"]
-    user = meta.get("user")
-    home_dir = "/home/capuser" if user else "/root"
-    home_volume_args = ["-v", f"cap-{name}-home:{home_dir}"] if meta["stateful"] else []
-    user_args = ["--user", f"{user}:{user}"] if user else []
-
-    try:
-        result = subprocess.run([
-            "docker", "run", "--rm", *tty, *platform_args,
-            *user_args,
-            *workspace_mount, *home_volume_args, "-w", "/workspace", *network_args,
-            *secret_env_args, final_tag, *container_args,
-        ])
-        if workspace_tmp and ws_info:
-            sync_workspace(workspace_tmp, ws_info, cwd, quiet=quiet_sync)
-        if net_log_path:
-            print_network_log(net_log_path)
-    finally:
-        if workspace_tmp:
-            shutil.rmtree(workspace_tmp, ignore_errors=True)
-        if proxy_proc:
-            proxy_proc.terminate()
-            proxy_proc.wait(timeout=5)
-        for f in proxy_tmpfiles:
-            os.unlink(f)
-
+    result = run(script_path, extra_args, force_build=force_build,
+                 verbose=verbose, quiet_sync=quiet_sync)
     sys.exit(result.returncode)
 
 
