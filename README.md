@@ -79,16 +79,22 @@ Claude programs execute inside a sandboxed Docker container with the vault mount
 
 ## Custom Tools
 
-Create tools as scripts in `/bin` with a `#!/bin/tool` shebang. The description follows on the shebang line, and the body is a Python script that runs in a sandboxed Docker container with the vault mounted at `/workspace`.
+Create tools as scripts in `/bin` with a cap-style frontmatter header. The frontmatter declares capabilities (dependencies, network policy, file access, secrets) and the body is the script that runs in an isolated Docker container via [cap](https://github.com/lbeurerkellner/cap).
 
 ```
-#!/bin/tool Count words in a file
+# ---
+# description: Count words in a file
+# access: ['$@:ro']
+# network: 'disable'
+# ---
 import sys
 with open(f'/workspace/{sys.argv[1]}') as f:
     print(len(f.read().split()))
 ```
 
 Save as `/bin/wordcount`, then use it from any agent via `ash wordcount myfile.txt`. Custom tools are automatically discovered and documented in agent system prompts.
+
+Frontmatter fields: `description`, `dependencies` (e.g. `['pypi:requests']`), `access` (file globs, `$@` for CLI args, `:ro`/`:rw` suffixes), `network` (`'*'`, `'disable'`, or allowlist), `secrets` (env vars from keychain), `stateful` (persist `/root` across runs).
 
 ## Monitoring
 

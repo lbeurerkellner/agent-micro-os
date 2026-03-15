@@ -9,6 +9,7 @@ description = "A simple, versioned vault for agents."
 readme = "README.md"
 requires-python = "==3.11.*"
 dependencies = [
+    "cap",
     "docker>=7.1.0",
     "fusepy>=3.0.1",
     "litellm>=1.81.6",
@@ -29,6 +30,9 @@ dev = [
     "pytest>=9.0.2",
 ]
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.hatch.build.targets.wheel]
 packages = ["fs", "bin", "system"]
 
@@ -38,6 +42,9 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
+
+[tool.uv.sources]
+cap = { path = "lib/cap", editable = true }
 
 [dependency-groups]
 dev = [

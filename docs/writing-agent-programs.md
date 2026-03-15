@@ -1,6 +1,6 @@
 # Writing Agent Programs
 
-Overview of how to write agent programs (in /bin/) which are text files with directives that define an LLM agent (the primary way to create reusable, executable AI workflows, e.g. for cron jobs)
+Overview of how to write agent programs (in /bin/) which are text files with directives that define an LLM agent (the primary way to create reusable, executable AI workflows, e.g. for cron jobs). For sandboxed script-based tools, see [Writing Cap Tools](/docs/writing-cap-tools.md).
 
 ## Minimal Example
 
@@ -57,7 +57,7 @@ Extra flags after `claude` are forwarded to the CLI (e.g. `--model sonnet`).
 
 ## Access Control
 
-The `.ACCESS` directive restricts which files the agent can see and write to. This is enforced at the sandbox boundary (claude engine and tool scripts).
+The `.ACCESS` directive restricts which files the agent can see and write to. This is enforced at the sandbox boundary (claude engine and cap tools).
 
 ### Syntax
 

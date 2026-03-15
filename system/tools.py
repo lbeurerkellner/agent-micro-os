@@ -5,6 +5,37 @@ import io
 import functools
 from pathlib import Path
 
+from cap import parse_content as _cap_parse_content
+
+
+def _detect_lang(content: str) -> str:
+    """Detect the frontmatter language from comment prefix."""
+    lines = content.splitlines()
+    i = 1 if lines and lines[0].startswith("#!") else 0
+    if i < len(lines) and lines[i].strip().startswith("//"):
+        return "js"
+    return "python"
+
+
+def parse_cap_meta(content: str) -> tuple[dict | None, str]:
+    """Parse cap-style frontmatter from a content string.
+
+    Returns ``(meta, body)``.  If no frontmatter block is found,
+    returns ``(None, content)``.
+    """
+    # Quick check: does this have a frontmatter opener?
+    lines = content.splitlines()
+    i = 1 if lines and lines[0].startswith("#!") else 0
+    if i >= len(lines):
+        return None, content
+    s = lines[i].strip()
+    if s not in ("# ---", "// ---"):
+        return None, content
+
+    lang = _detect_lang(content)
+    meta, body = _cap_parse_content(content, lang=lang)
+    return meta, body
+
 
 # static built-in tools
 TOOLS = {}
@@ -61,17 +92,11 @@ def _vault_commands_summary(fs, access=None) -> list[str]:
         name = filepath[4:]  # strip "bin/"
         if not name or "/" in name or name in builtin_names:
             continue
-        # Try to extract description from #!/bin/tool shebang
         try:
             content = fs.read(filepath).decode("utf-8")
-            first_line = content.splitlines()[0] if content else ""
-            if first_line.startswith("#!") and "tool" in first_line.split()[0]:
-                # #!/bin/tool <description>
-                desc = first_line.split(None, 1)[1] if " " in first_line else ""
-                if desc:
-                    lines.append(f"{name} - {desc}")
-                else:
-                    lines.append(name)
+            meta, _ = parse_cap_meta(content)
+            if meta and meta.get("description"):
+                lines.append(f"{name} - {meta['description']}")
             else:
                 lines.append(name)
         except Exception:

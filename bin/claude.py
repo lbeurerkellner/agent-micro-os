@@ -99,7 +99,6 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, access=None)
             quiet=quiet,
             capture=tool_use_mode,  # Capture output for tool use mode
             agents_md_name="CLAUDE.md",
-            tool_shebang=False,  # claude image has it built-in
             access=access,
         )
     finally:

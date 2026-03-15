@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cap"
+version = "0.1.0"
+description = "Run .cap.py scripts in cached Docker containers"
+requires-python = ">=3.10"
+dependencies = [
+    "keyring>=25.7.0",
+]
+
+[project.scripts]
+cap = "cap:main"
+
+[tool.hatch.build.targets.wheel]
+modules = ["cap"]

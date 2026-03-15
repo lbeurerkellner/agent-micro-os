@@ -56,16 +56,47 @@ The host OS supports cron-style scheduling via `/etc/crontab`:
 
 ## Creating New Tools
 
-To create a new tool, write a file to `/bin/<name>` with a `#!/bin/tool` shebang. The description follows on the shebang line, and the body is a Python script that runs in a sandboxed environment with the full vault mounted at `/workspace`.
+To create a new tool, write a file to `/bin/<name>` starting with a `#!/usr/bin/env cap` shebang followed by a frontmatter block. The frontmatter declares metadata (description, dependencies, network policy, file access, secrets) and the body is the script that runs in an isolated Docker container.
 
 Example (`/bin/wordcount`):
 ```
-#!/bin/tool Count words in a file
+#!/usr/bin/env cap
+# ---
+# description: Count words in a file
+# access: ['$@:ro']
+# network: 'disable'
+# ---
 import sys
 with open(f'/workspace/{sys.argv[1]}') as f:
     print(len(f.read().split()))
 ```
 
-Arguments are passed via `sys.argv`. Output printed to stdout is returned to the caller.
+The `#!/usr/bin/env cap` shebang is **required** — without it, the file will not be recognized as a cap tool.
+
+For Node.js tools, use `//` comment syntax for frontmatter and set `runtime: 'node'`:
+```
+#!/usr/bin/env cap
+// ---
+// description: Fetch npm package info
+// runtime: 'node'
+// network: ['registry.npmjs.org']
+// ---
+const https = require('https');
+// ...
+```
+
+### Frontmatter Fields
+
+| Field | Description |
+|-------|-------------|
+| `description` | One-line summary (shown in help and agent prompts) |
+| `runtime` | `'python'` (default), `'node'`, or `'shell'`. Determines comment syntax (`#` vs `//`) and container runtime. |
+| `dependencies` | Package list, e.g. `['pypi:requests', 'npm:lodash']` |
+| `access` | File globs copied into the container. `$@` expands to CLI args. Suffix `:ro` for read-only (default `:rw`). |
+| `network` | `'*'` (unrestricted, default), `'disable'` (no network), or an allowlist like `['api.example.com']` |
+| `secrets` | Env vars injected from the system keychain, e.g. `['API_KEY']` |
+| `stateful` | `true` to persist `/root` across runs |
+
+Arguments are passed via `sys.argv` (Python), `process.argv` (Node.js), or `$@` (shell). Output printed to stdout is returned to the caller.
 
 {{COMMIT_NOTE}}

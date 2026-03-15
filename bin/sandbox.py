@@ -5,14 +5,10 @@ _DIM = "\033[1;90m"
 _RST = "\033[0m"
 
 
-_TOOL_SHEBANG_SETUP = (
-    "printf '#!/bin/sh\\nif [ ! -f \"$1\" ]; then shift; fi\\nexec python3 \"$@\"\\n'"
-    " > /bin/tool && chmod +x /bin/tool"
-)
 
 
 async def run(*args, env: dict = None, readonly=False, quiet=False, capture=False,
-              agents_md_name="AGENTS.md", tool_shebang=True, access=None):
+              agents_md_name="AGENTS.md", access=None):
     """Launch a Docker container with vault contents mounted as a volume.
 
     Usage: sandbox [--image IMAGE] [--build DOCKERFILE] [--prefix PATH] [--no-version GLOB] [--cmd CMD] [path]
@@ -129,11 +125,12 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, capture=Fals
                         "-w", mount,
                         *env_args,
                         image]
-        # Build setup preamble: workspace bin on PATH + optional /bin/tool
-        setup_parts = [f"export PATH={mount}/bin:$PATH"]
-        if tool_shebang:
-            setup_parts.append(_TOOL_SHEBANG_SETUP)
-        setup = " && ".join(setup_parts)
+        # Build setup preamble: workspace bin on PATH + cap stub in /tmp
+        cap_stub_cmd = (
+            'mkdir -p /tmp/bin && printf \'#!/bin/sh\\necho "error: cap tools cannot be called in this environment" >&2\\nexit 127\\n\''
+            " > /tmp/bin/cap && chmod +x /tmp/bin/cap"
+        )
+        setup = f"export PATH={mount}/bin:/tmp/bin:$PATH && {cap_stub_cmd}"
 
         if cmd:
             docker_args.extend(["sh", "-c", f"{setup} && {cmd}"])
@@ -214,12 +211,18 @@ def _build_snapshot(fs, prefix, access=None, agents_md_name="AGENTS.md"):
         rel = filepath[len(pfx):] if pfx else filepath
         snapshot[rel] = content
 
-    # Inject AGENTS.md and empty COMMIT_MSG
-    md = generate_agents_md(fs, sandbox_note=True, access=access)
-    snapshot[agents_md_name] = md.encode("utf-8")
-    snapshot["COMMIT_MSG"] = b""
+    # Inject AGENTS.md and empty COMMIT_MSG (skip for cap tool runs)
+    if agents_md_name:
+        md = generate_agents_md(fs, sandbox_note=True, access=access)
+        snapshot[agents_md_name] = md.encode("utf-8")
+        snapshot["COMMIT_MSG"] = b""
 
     return snapshot
+
+
+def _is_executable(content: bytes) -> bool:
+    """Return True if content starts with a shebang line."""
+    return content.startswith(b"#!")
 
 
 def _export_to_dir(snapshot, tmpdir, uid=0, gid=0):
@@ -231,8 +234,7 @@ def _export_to_dir(snapshot, tmpdir, uid=0, gid=0):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "wb") as f:
             f.write(content)
-        is_tool = content.startswith(b"#!/bin/tool") or content.startswith(b"#!/sbin/tool")
-        os.chmod(path, 0o755 if is_tool else 0o600)
+        os.chmod(path, 0o755 if _is_executable(content) else 0o600)
 
 
 def _diff_from_dir(tmpdir, snapshot):

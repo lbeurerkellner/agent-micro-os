@@ -44,13 +44,12 @@ async def execute(ctx, filepath, *args):
                 cprint(f"Error running ash script {filepath}: {str(e)}", file=ctx.stderr)
             return
 
-        # Check if it's a tool script (#!/bin/tool <description>)
-        interpreter = shebang.split()[0] if shebang else ""
-        if interpreter in ['/bin/tool', '/sbin/tool', 'tool']:
-            await _run_tool_script(ctx, filepath, rest, *args)
+        # Check if it's a cap tool
+        if shebang in ['/usr/bin/env cap', 'cap']:
+            await _run_cap_tool(ctx, filepath, contents, *args)
             return
 
-        cprint(f"{filepath}: unsupported interpreter: {shebang}", file=ctx.stderr)
+        cprint(f"{filepath}: unsupported interpreter", file=ctx.stderr)
         return
 
     # check for .PROMPT directive (may appear after other directives like .ENGINE, .BUDGET)
@@ -73,31 +72,155 @@ async def execute(ctx, filepath, *args):
         return
 
 
-async def _run_tool_script(ctx, filepath, script_body, *args):
-    """Run a #!/bin/tool script in a sandboxed Python environment."""
-    import uuid
-    import shlex
+def _build_cap_snapshot(fs, access, args, cwd):
+    """Build a selective snapshot containing only files matched by access entries.
+
+    Explicit paths (vault-absolute like ``/var/experiences``) are resolved from
+    the vault root.  ``$@`` entries resolve CLI args relative to *cwd*.
+
+    Returns ``(snapshot, rewritten_args)`` where snapshot is
+    ``{vault_rel_path: bytes}`` and rewritten_args has ``$@`` paths made
+    vault-root-relative.
+    """
+    from fnmatch import fnmatch
+    import posixpath
+
+    snapshot = {}
+    cwd_prefix = cwd.strip("/") if cwd else ""
+    resolved_args = {}  # arg -> vault-root-relative path (only for args that exist)
+
+    for entry in access:
+        raw = entry
+        if raw.endswith((":ro", ":rw")):
+            raw = raw[:-3]
+
+        if raw.startswith("$@"):
+            # Resolve each CLI arg relative to cwd
+            for arg in args:
+                if arg.startswith("-"):
+                    continue
+                vault_path = f"{cwd_prefix}/{arg}" if cwd_prefix else arg
+                vault_path = posixpath.normpath(vault_path).strip("/")
+                if vault_path == ".":
+                    vault_path = ""
+                if fs.exists(vault_path):
+                    resolved_args[arg] = vault_path if vault_path else "."
+                    if fs.is_dir(vault_path):
+                        for f in fs.list(prefix=vault_path):
+                            snapshot[f] = fs.read(f)
+                    else:
+                        snapshot[vault_path] = fs.read(vault_path)
+        else:
+            # Vault-absolute path — strip leading /
+            vault_path = raw.lstrip("/")
+            if fs.exists(vault_path):
+                if fs.is_dir(vault_path):
+                    for f in fs.list(prefix=vault_path):
+                        snapshot[f] = fs.read(f)
+                else:
+                    snapshot[vault_path] = fs.read(vault_path)
+            # Also match as a glob pattern
+            else:
+                for f in fs.list():
+                    if fnmatch(f, vault_path):
+                        snapshot[f] = fs.read(f)
+
+    # Rewrite $@ args to vault-root-relative paths (only args that resolved)
+    rewritten_args = []
+    for arg in args:
+        if arg in resolved_args:
+            rewritten_args.append(resolved_args[arg])
+        else:
+            rewritten_args.append(arg)
+
+    return snapshot, rewritten_args
+
+
+async def _run_cap_tool(ctx, filepath, contents, *args):
+    """Run a cap-frontmatter tool by exporting the vault and invoking ``cap``."""
+    import asyncio
+    import os
+    import shutil
+    import tempfile
+
+    from bin.sandbox import (
+        _diff_and_commit,
+        _diff_from_dir,
+        _export_to_dir,
+    )
+    from fs.vault import Vault
+
+    from system.tools import parse_cap_meta
 
     fs = ctx.fs()
-    temp_id = str(uuid.uuid4())
-    temp_file = f"tmp/tool_{temp_id}.py"
-    fs.write(temp_file, script_body.strip().encode("utf-8"))
+    vault = Vault(ctx.fsimage, ctx.user)
+    meta, _ = parse_cap_meta(contents)
+
+    # Validate access paths: all must be vault-absolute except "$@" entries.
+    access = meta.get("access") or []
+    for entry in access:
+        raw = entry.split(":")[0] if ":" in entry else entry
+        if not raw.startswith("/") and not raw.startswith("$@"):
+            cprint(f"{filepath}: relative access path '{entry}' not allowed — use vault-absolute paths (e.g. '/{raw}')", file=ctx.stderr)
+            return
+
+    # Build selective snapshot — only files matched by access entries.
+    snapshot, rewritten_args = _build_cap_snapshot(fs, access, args, ctx.cwd)
+    tmpdir = tempfile.mkdtemp(prefix="vault-cap-")
+    _export_to_dir(snapshot, tmpdir)
+
+    # Write the tool as a .cap.py file with a stable name so cap's
+    # image tags (which include the tool name) are consistent across runs.
+    tool_name = filepath.rsplit("/", 1)[-1] if "/" in filepath else filepath
+    cap_dir = os.path.join(tempfile.gettempdir(), "cap-vault")
+    os.makedirs(cap_dir, exist_ok=True)
+    lang = meta.get("lang", "python")
+    ext_map = {"python": ".cap.py", "js": ".cap.js", "sh": ".cap.sh"}
+    cap_ext = ext_map.get(lang, ".cap.py")
+    cap_path = os.path.join(cap_dir, f"{tool_name}{cap_ext}")
+
+    # Strip leading "/" from access paths so cap sees them as relative
+    # to its workspace root.
+    if any(e.startswith("/") for e in access):
+        normed = [e.lstrip("/") for e in access]
+        contents = contents.replace(repr(access), repr(normed))
+
+    with open(cap_path, "w") as f:
+        f.write(contents)
 
     try:
-        from bin.sandbox import run as sandbox_run
-        cmd = f"python /workspace/{temp_file}"
-        if args:
-            cmd += " " + " ".join(shlex.quote(a) for a in args)
-        result = await sandbox_run(
-            "--image", "python:3.12", "--cmd", cmd,
-            readonly=False, quiet=True, capture=True,
-        )
-        if result:
-            cprint(result)
+        cmd = ["cap", "--quiet", cap_path]
+        cmd.extend(rewritten_args)
+
+        interactive = ctx.interactive
+
+        if interactive:
+            # Let cap inherit the terminal for interactive tools (shells, REPLs)
+            proc = await asyncio.create_subprocess_exec(*cmd, cwd=tmpdir)
+            await proc.wait()
+        else:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=tmpdir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            tool_output = stdout.decode().strip()
+            if tool_output:
+                cprint(tool_output)
+            err = stderr.decode().strip()
+            if err:
+                cprint(err, file=ctx.stderr)
+
+        # Diff and commit changes back — no prefix since snapshot paths
+        # are already vault-root-relative.
+        current = _diff_from_dir(tmpdir, snapshot)
+        _diff_and_commit(vault, snapshot, current, prefix="", quiet=False)
     except Exception as e:
-        cprint(f"Error running tool {filepath}: {str(e)}", file=ctx.stderr)
+        cprint(f"Error running cap tool {filepath}: {str(e)}", file=ctx.stderr)
     finally:
-        try:
-            fs.delete(temp_file)
-        except Exception:
-            pass
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        os.unlink(cap_path)
+
+
