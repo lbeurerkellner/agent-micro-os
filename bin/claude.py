@@ -1,32 +1,70 @@
 import os
 import shlex
-from pathlib import Path
+import uuid
 
 from system.context import cprint
-
-_IMAGE = "claude-sandbox:latest"
-_DOCKERFILE = Path(__file__).parent.parent / "sandboxes" / "Dockerfile.claude"
-_NODE_UID = 1000
 
 _USAGE = """\
 claude - Run the Claude Code agent in a sandboxed environment
 
-When this command completes, the changes will be commmitted back to this workspace automatically. When the agent creates e.g. a file at /workspace/path/to/file.txt, it will be saved back to the vault at /path/to/file.txt.
+When this command completes, the changes will be committed back to this workspace automatically. When the agent creates e.g. a file at /workspace/path/to/file.txt, it will be saved back to the vault at /path/to/file.txt.
 
 When communicating to the user about what 'claude' did, always omit the /workspace prefix.
 
 Usage: claude PROMPT
 """
 
+_NO_VERSION_GLOBS = [
+    "agent/.claude/.claude.json",
+    "agent/.claude/.credentials.json",
+    "agent/.claude/projects/**/*.jsonl",
+    "agent/.claude/settings.json",
+]
+
+_IGNORE_GLOBS = [
+    "agent/.claude/**",
+    "CLAUDE.md",
+]
+
+
+def _build_cap_script(env: dict):
+    """Generate a .cap.sh script for running Claude Code.
+
+    Environment variables are baked into the script body because cap only
+    injects ``secrets`` as ``-e`` flags to Docker — arbitrary env vars set
+    on the cap subprocess do not reach the container.
+    """
+    env_lines = "\n".join(f"export {k}={shlex.quote(v)}" for k, v in env.items())
+    return f"""\
+#!/usr/bin/env cap
+# ---
+# name: claude-agent
+# description: Claude Code agent
+# dependencies: ['npm:@anthropic-ai/claude-code']
+# access: ['**:rw']
+# network: '*'
+# user: 1000
+# runtime: shell
+# ---
+
+# Environment setup (replaces what Dockerfile.claude used to bake in)
+export HOME=/home/capuser
+export PATH="/workspace/bin:$PATH"
+export CLAUDE_DANGEROUSLY_SKIP_CONFIRMATIONS=1
+{env_lines}
+
+exec claude "$@"
+"""
+
 
 async def run(*args, env: dict = None, readonly=False, quiet=False, access=None):
-    """Run the claude CLI in a Docker container.
+    """Run the claude CLI in a cap-managed Docker container.
 
     Usage: claude [--prefix PATH] [claude-args...]
 
-    Builds the claude container image from sandboxes/Dockerfile.claude if it is
-    not already present, then delegates to sandbox with the vault prefix mounted
-    at /workspace as the node user (uid 1000).
+    Builds the container image via cap (two-stage cached Docker build with
+    npm:@anthropic-ai/claude-code as a dependency), then mounts the vault
+    snapshot and runs claude inside it.
 
     Options:
         --prefix PATH   Vault path to mount at /workspace (default: cwd)
@@ -37,8 +75,18 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, access=None)
              ANTHROPIC_API_KEY is forwarded automatically when set in the host env.
         readonly: If True, do not commit changes back to the vault.
     """
+    import asyncio
+    import shutil
+    import tempfile
+
+    from bin.sandbox import (
+        _build_snapshot,
+        _diff_and_commit,
+        _diff_from_dir,
+        _export_to_dir,
+    )
+    from fs.vault import Vault
     from system.context import SystemContext
-    from bin.sandbox import run as sandbox_run
 
     ctx = SystemContext.current()
     if not ctx:
@@ -66,40 +114,76 @@ async def run(*args, env: dict = None, readonly=False, quiet=False, access=None)
         claude_args.append("-p")
         claude_args.append("--dangerously-skip-permissions")
 
-    # Forward ANTHROPIC_API_KEY from the host environment; fix config dir
-    merged_env = {}
+    # Build env vars to bake into the cap script (these run inside the container)
+    container_env = {"CLAUDE_CONFIG_DIR": "/workspace/agent/.claude"}
     if "ANTHROPIC_API_KEY" in os.environ:
-        merged_env["ANTHROPIC_API_KEY"] = os.environ["ANTHROPIC_API_KEY"]
-    merged_env["CLAUDE_CONFIG_DIR"] = "/workspace/agent/.claude"
-    merged_env.update(env or {})
+        container_env["ANTHROPIC_API_KEY"] = os.environ["ANTHROPIC_API_KEY"]
+    container_env.update(env or {})
 
-    cmd = "claude " + " ".join(shlex.quote(a) for a in claude_args) if claude_args else "claude"
+    # Build the vault snapshot (handles access filtering + CLAUDE.md injection)
+    vault = Vault(ctx.fsimage, ctx.user)
+    fs = ctx.fs()
+    snapshot = _build_snapshot(fs, prefix, access=access, agents_md_name="CLAUDE.md")
+    tmpdir = tempfile.mkdtemp(prefix="vault-claude-")
+    _export_to_dir(snapshot, tmpdir)
+
+    # Write the cap script to a stable temp location
+    cap_dir = os.path.join(tempfile.gettempdir(), "cap-vault")
+    os.makedirs(cap_dir, exist_ok=True)
+    cap_path = os.path.join(cap_dir, "claude-agent.cap.sh")
+    with open(cap_path, "w") as f:
+        f.write(_build_cap_script(container_env))
+
+    # Build the claude command to pass as args to the cap script
+    cap_cmd = ["cap", "--quiet", cap_path]
+    cap_cmd.extend(claude_args)
 
     # Register as an active process so it shows up in top
-    import uuid
     call_id = uuid.uuid4().hex[:8]
     prompt_summary = " ".join(claude_args)[:60] if claude_args else ""
     ctx.register_agent(call_id, f"claude: {prompt_summary}", "")
 
     try:
-        return await sandbox_run(
-            "--image", _IMAGE,
-            "--build", str(_DOCKERFILE),
-            "--prefix", prefix,
-            "--uid", str(_NODE_UID),
-            # Persist config and session files; ignore the rest of .claude/
-            "--no-version", "agent/.claude/.claude.json",
-            "--no-version", "agent/.claude/.credentials.json",
-            "--no-version", "agent/.claude/projects/**/*.jsonl",
-            "--no-version", "agent/.claude/settings.json",
-            "--ignore", "agent/.claude/**",
-            "--cmd", cmd,
-            env=merged_env,
-            readonly=readonly,
-            quiet=quiet,
-            capture=tool_use_mode,  # Capture output for tool use mode
-            agents_md_name="CLAUDE.md",
+        if ctx.interactive:
+            proc = await asyncio.create_subprocess_exec(
+                *cap_cmd, cwd=tmpdir,
+            )
+            await proc.wait()
+        else:
+            proc = await asyncio.create_subprocess_exec(
+                *cap_cmd, cwd=tmpdir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            output = stdout.decode() + stderr.decode()
+            if not quiet:
+                cprint(output.strip())
+
+        # Diff and commit changes back with no-version semantics
+        if readonly:
+            if not quiet:
+                cprint("Discarding changes (--readonly mode).")
+            if tool_use_mode:
+                return f"{output}\n[exit code: {proc.returncode}]"
+            return proc.returncode == 0
+
+        vault_prefix = (prefix.strip("/") + "/") if prefix.strip("/") else ""
+        current = _diff_from_dir(tmpdir, snapshot)
+        _diff_and_commit(
+            vault, snapshot, current, prefix=vault_prefix, quiet=quiet,
+            no_version_globs=_NO_VERSION_GLOBS,
+            ignore_globs=_IGNORE_GLOBS,
             access=access,
         )
+
+        if tool_use_mode:
+            return f"{output}\n[exit code: {proc.returncode}]"
+        return proc.returncode == 0
+    except Exception as e:
+        cprint(f"Error running claude: {str(e)}", file=ctx.stderr)
     finally:
         ctx.unregister_agent(call_id)
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        if os.path.exists(cap_path):
+            os.unlink(cap_path)

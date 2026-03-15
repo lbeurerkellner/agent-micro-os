@@ -79,7 +79,7 @@ Claude programs execute inside a sandboxed Docker container with the vault mount
 
 ## Custom Tools
 
-Create tools as scripts in `/bin` with a cap-style frontmatter header. The frontmatter declares capabilities (dependencies, network policy, file access, secrets) and the body is the script that runs in an isolated Docker container via [cap](https://github.com/lbeurerkellner/cap).
+Create tools as scripts in `/bin` with a [cap](lib/cap/README.md)-style frontmatter header. The frontmatter declares capabilities (dependencies, network policy, file access, secrets) and the body is the script that runs in an isolated Docker container via [cap](https://github.com/lbeurerkellner/cap).
 
 ```
 # ---

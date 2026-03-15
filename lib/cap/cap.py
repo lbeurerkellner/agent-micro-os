@@ -120,7 +120,8 @@ def parse_content(text: str, lang: str = "python"):
         return None  # not a comment line
 
     meta = {"name": None, "description": "", "dependencies": [], "lang": lang,
-            "platform": None, "access": [], "network": ["*"], "secrets": [], "stateful": False}
+            "platform": None, "access": [], "network": ["*"], "secrets": [], "stateful": False,
+            "user": None}
 
     i = 0
     if lines and lines[0].startswith("#!"):
@@ -175,6 +176,8 @@ def parse_content(text: str, lang: str = "python"):
                             meta["secrets"] = []
                     elif key == "stateful":
                         meta["stateful"] = val.strip().lower() in ("true", "yes", "1")
+                    elif key == "user":
+                        meta["user"] = val.strip().strip("'\"")
                     elif key == "runtime":
                         rt = val.strip().strip("'\"").lower()
                         runtime_map = {"python": "python", "node": "js", "shell": "sh", "sh": "sh", "js": "js"}
@@ -209,8 +212,8 @@ def parse_file(path: str):
 
 
 def compute_hashes(dependencies: list, body: str, platform: str = None, ca_cert_hash: str = None,
-                   secrets: list = None):
-    deps_str = repr(sorted(dependencies)) + "\n" + (platform or "") + "\n" + (ca_cert_hash or "")
+                   secrets: list = None, user: str = None):
+    deps_str = repr(sorted(dependencies)) + "\n" + (platform or "") + "\n" + (ca_cert_hash or "") + "\n" + (user or "")
     deps_hash = hashlib.sha256(deps_str.encode()).hexdigest()[:12]
     secrets_str = repr(sorted(secrets or []))
     full_str = deps_str + "\n" + body + "\n" + secrets_str + "\n" + _IMAGE_FORMAT_VERSION
@@ -224,7 +227,7 @@ def image_exists(tag: str) -> bool:
 
 
 def build_deps_image(name: str, dependencies: list, tag: str, platform: str = None,
-                     ca_cert_path: str = None):
+                     ca_cert_path: str = None, user: str = None):
     pypi = [d[5:] for d in dependencies if d.startswith("pypi:")]
     npm = [d[4:] for d in dependencies if d.startswith("npm:")]
 
@@ -242,6 +245,11 @@ def build_deps_image(name: str, dependencies: list, tag: str, platform: str = No
         "RUN uv venv /venv",
         'ENV PATH="/venv/bin:$PATH" VIRTUAL_ENV=/venv',
     ]
+    # Create a non-root user when user is specified
+    if user:
+        dockerfile_lines.append(
+            f'RUN useradd -m -u {user} -s /bin/sh capuser'
+        )
     if pypi:
         dockerfile_lines.append(f'RUN uv pip install {" ".join(pypi)}')
     if npm:
@@ -982,6 +990,7 @@ def main():
     access = meta["access"]
     network = meta["network"]
     secrets = meta["secrets"]
+    user = meta.get("user")
 
     # Resolve CA cert path before hashing so cert changes invalidate the deps image.
     ca_cert_path = None
@@ -990,13 +999,15 @@ def main():
 
     ca_cert_hash = _file_hash(ca_cert_path) if ca_cert_path else None
     deps_hash, full_hash = compute_hashes(deps, body, platform=platform,
-                                          ca_cert_hash=ca_cert_hash, secrets=secrets)
+                                          ca_cert_hash=ca_cert_hash, secrets=secrets,
+                                          user=user)
     deps_tag = f"cap-{name}-deps:{deps_hash}"
     final_tag = f"cap-{name}:{full_hash}"
 
     if force_build or not image_exists(final_tag):
         if force_build or not image_exists(deps_tag):
-            build_deps_image(name, deps, deps_tag, platform=platform, ca_cert_path=ca_cert_path)
+            build_deps_image(name, deps, deps_tag, platform=platform, ca_cert_path=ca_cert_path,
+                             user=user)
         build_final_image(deps_tag, body, lang, final_tag, platform=platform)
 
     # Resolve secrets before entering the network/proxy setup so the user is
@@ -1031,11 +1042,15 @@ def main():
     tty = ["-it"] if sys.stdin.isatty() else ["-i"]
     platform_args = ["--platform", platform] if platform else []
     workspace_mount = ["-v", f"{workspace_tmp}:/workspace"]
-    home_volume_args = ["-v", f"cap-{name}-home:/root"] if meta["stateful"] else []
+    user = meta.get("user")
+    home_dir = "/home/capuser" if user else "/root"
+    home_volume_args = ["-v", f"cap-{name}-home:{home_dir}"] if meta["stateful"] else []
+    user_args = ["--user", f"{user}:{user}"] if user else []
 
     try:
         result = subprocess.run([
             "docker", "run", "--rm", *tty, *platform_args,
+            *user_args,
             *workspace_mount, *home_volume_args, "-w", "/workspace", *network_args,
             *secret_env_args, final_tag, *container_args,
         ])
