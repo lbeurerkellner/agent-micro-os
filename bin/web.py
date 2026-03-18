@@ -46,58 +46,54 @@ def get_user(request: Request) -> str | None:
 
 CSS = """
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html { height: 100%; -webkit-text-size-adjust: 100%; }
-body { font-family: -apple-system, system-ui, sans-serif; min-height: 100%; background: #1a1a2e; color: #e0e0e0; padding: 0.75rem; padding-top: env(safe-area-inset-top, 0.75rem); padding-bottom: env(safe-area-inset-bottom, 0.75rem); padding-left: max(0.75rem, env(safe-area-inset-left)); padding-right: max(0.75rem, env(safe-area-inset-right)); font-size: 15px; line-height: 1.5; }
-a { color: #7ec8e3; text-decoration: none; -webkit-tap-highlight-color: transparent; }
-a:active { opacity: 0.7; }
-pre { background: #16213e; padding: 0.75rem; border-radius: 8px; overflow-x: auto; border: 1px solid #333; font-size: 13px; -webkit-overflow-scrolling: touch; word-break: break-word; white-space: pre-wrap; }
-code { background: #16213e; padding: 0.15rem 0.35rem; border-radius: 4px; font-size: 13px; }
-pre code { background: none; padding: 0; }
-h1 { color: #7ec8e3; font-size: 1.3rem; }
-h2 { font-size: 1.1rem; margin-bottom: 0.5rem; word-break: break-all; }
-.login-form { max-width: 100%; margin: 3rem auto; padding: 0 0.25rem; }
-.login-form input { display: block; width: 100%; padding: 0.75rem; margin: 0.5rem 0; background: #16213e; color: #e0e0e0; border: 1px solid #444; border-radius: 8px; font-size: 16px; -webkit-appearance: none; }
-.login-form button { width: 100%; padding: 0.75rem; cursor: pointer; background: #0f3460; color: #e0e0e0; border: 1px solid #555; border-radius: 8px; font-size: 16px; margin-top: 0.5rem; }
-.login-form button:active { background: #1a4a7a; }
-.breadcrumb { margin-bottom: 0.75rem; font-size: 0.85rem; overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; padding-bottom: 0.25rem; }
+html { height: 100%; }
+body { font-family: georgia, serif; font-size: large; line-height: 1.5; max-width: 40em; margin: 0 auto; overflow-wrap: break-word; padding: 0 1em; padding-top: env(safe-area-inset-top, 1em); padding-bottom: env(safe-area-inset-bottom, 1em); background: #111; color: #bbb; }
+a:link { color: #9bf; }
+a:visited { color: #a9f; }
+a:focus, a:hover { color: #9cf; }
+a:active { color: #f99; }
+a { text-decoration: none; }
+h1, h2, h3, h4, h5, h6 { margin: 1.25em 0 0.25em 0; line-height: 1.2; }
+pre, code, samp, kbd { font-family: monospace,monospace; font-size: 0.9em; }
+pre code, pre samp, pre kbd { font-size: 1.0em; }
+code, pre kbd { color: #9c6; }
+samp { color: #db0; }
+pre { background: #000; box-shadow: 0 0 0.5em #333; overflow: auto; margin: 1em 0; padding: 0.5em; }
+pre code { background: none; }
+blockquote { background: #000; box-shadow: 0 0 0.5em #333; border-left: thick solid #333; margin: 1em 0; padding: 0.5em; }
+hr { border: 0; border-bottom: 0.15em dotted #666; margin: 1.5em auto; }
+.login-form { max-width: 100%; margin: 3em auto; }
+.login-form input { display: block; width: 100%; padding: 0.5em; margin: 0.5em 0; background: #000; color: #bbb; border: 1px solid #333; font-family: georgia, serif; font-size: 1em; }
+.login-form button { width: 100%; padding: 0.5em; cursor: pointer; background: #000; color: #9bf; border: 1px solid #333; font-family: georgia, serif; font-size: 1em; margin-top: 0.5em; }
+.login-form button:hover { color: #9cf; }
+.breadcrumb { margin-bottom: 1em; font-size: 0.85em; overflow-x: auto; white-space: nowrap; }
 .file-list { list-style: none; }
-.file-list li { padding: 0.5rem 0; border-bottom: 1px solid #ffffff0d; }
+.file-list li { padding: 0.4em 0; border-bottom: 1px solid #222; }
 .file-list li:last-child { border-bottom: none; }
-.file-list li a { display: block; padding: 0.15rem 0; }
-.meta { color: #888; font-size: 0.8rem; }
-nav { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; padding-bottom: 0.5rem; margin-bottom: 0.75rem; gap: 0.5rem; font-size: 0.9rem; }
-.error { color: #ff6b6b; }
-
-/* Tabs */
-.tabs { display: flex; gap: 0; margin-bottom: 0.75rem; border-bottom: 2px solid #333; }
-.tab { padding: 0.6rem 1rem; color: #888; font-size: 0.95rem; border-bottom: 2px solid transparent; margin-bottom: -2px; }
-.tab.active { color: #7ec8e3; border-bottom-color: #7ec8e3; }
-
-/* Notes list (Apple Notes style) */
+.meta { color: #666; font-size: 0.85em; }
+nav { display: flex; justify-content: space-between; align-items: center; border-bottom: 0.15em dotted #666; padding-bottom: 0.5em; margin-bottom: 1em; font-size: 0.9em; }
+.error { color: #f99; }
+.tabs { display: flex; gap: 0; margin-bottom: 1em; border-bottom: 0.15em dotted #666; }
+.tab { padding: 0.4em 1em; color: #666; font-size: 0.9em; border-bottom: 0.15em solid transparent; margin-bottom: -0.15em; }
+.tab.active { color: #9bf; border-bottom-color: #9bf; }
 .note-list { list-style: none; }
-.note-list li { border-bottom: 1px solid #ffffff0d; }
+.note-list li { border-bottom: 1px solid #222; }
 .note-list li:last-child { border-bottom: none; }
-.note-list a { display: block; padding: 0.75rem 0.25rem; }
-.note-title { font-size: 1rem; font-weight: 600; color: #e0e0e0; margin-bottom: 0.2rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.note-date { font-size: 0.75rem; color: #888; margin-bottom: 0.15rem; }
-.note-snippet { font-size: 0.85rem; color: #999; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-/* Rendered markdown */
-.md-content { line-height: 1.7; }
-.md-content h1, .md-content h2, .md-content h3, .md-content h4 { color: #7ec8e3; margin: 1rem 0 0.5rem; }
-.md-content h1 { font-size: 1.4rem; }
-.md-content h2 { font-size: 1.2rem; }
-.md-content h3 { font-size: 1.05rem; }
-.md-content p { margin: 0.5rem 0; }
-.md-content ul, .md-content ol { margin: 0.5rem 0; padding-left: 1.5rem; }
-.md-content li { margin: 0.25rem 0; }
-.md-content blockquote { border-left: 3px solid #7ec8e3; padding-left: 0.75rem; margin: 0.5rem 0; color: #aaa; }
-.md-content hr { border: none; border-top: 1px solid #333; margin: 1rem 0; }
-.md-content a { color: #7ec8e3; }
-.md-content img { max-width: 100%; border-radius: 6px; }
-.md-content table { border-collapse: collapse; width: 100%; margin: 0.5rem 0; }
-.md-content th, .md-content td { border: 1px solid #333; padding: 0.4rem 0.6rem; text-align: left; }
-.md-content th { background: #16213e; }
+.note-list a { display: block; padding: 0.75em 0; }
+.note-title { font-size: 1em; font-weight: bold; color: #bbb; margin-bottom: 0.2em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.note-date { font-size: 0.75em; color: #666; margin-bottom: 0.15em; }
+.note-snippet { font-size: 0.85em; color: #888; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.md-content { line-height: 1.5; }
+.md-content h1, .md-content h2, .md-content h3, .md-content h4 { margin: 1.25em 0 0.25em; line-height: 1.2; }
+.md-content p { margin: 0.75em 0; }
+.md-content ul, .md-content ol { margin: 0.75em 0; padding-left: 1.5em; }
+.md-content li { margin: 0.25em 0; }
+.md-content blockquote { background: #000; box-shadow: 0 0 0.5em #333; border-left: thick solid #333; margin: 1em 0; padding: 0.5em; color: #888; }
+.md-content hr { border: 0; border-bottom: 0.15em dotted #666; margin: 1.5em auto; }
+.md-content img { max-width: 100%; }
+.md-content table { border-collapse: collapse; width: 100%; margin: 0.75em 0; }
+.md-content th, .md-content td { border: 1px solid #333; padding: 0.4em 0.6em; text-align: left; }
+.md-content th { background: #000; }
 """
 
 # Lightweight markdown to HTML (no external deps)
