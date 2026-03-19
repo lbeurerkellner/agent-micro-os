@@ -62,20 +62,23 @@ pre { background: #000; box-shadow: 0 0 0.5em #333; overflow: auto; margin: 1em 
 pre code { background: none; }
 blockquote { background: #000; box-shadow: 0 0 0.5em #333; border-left: thick solid #333; margin: 1em 0; padding: 0.5em; }
 hr { border: 0; border-bottom: 0.15em dotted #666; margin: 1.5em auto; }
-.login-form { max-width: 100%; margin: 3em auto; }
+.login-form { max-width: 100%; min-height: 80vh; display: flex; flex-direction: column; justify-content: center; }
 .login-form input { display: block; width: 100%; padding: 0.5em; margin: 0.5em 0; background: #000; color: #bbb; border: 1px solid #333; font-family: georgia, serif; font-size: 1em; }
 .login-form button { width: 100%; padding: 0.5em; cursor: pointer; background: #000; color: #9bf; border: 1px solid #333; font-family: georgia, serif; font-size: 1em; margin-top: 0.5em; }
 .login-form button:hover { color: #9cf; }
+.logo { width: 4em; height: 4em; border-radius: 50%; border: 0.15em solid #9bf; margin: 0 auto 1.5em; animation: pulse 3s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(153,187,255,0.4); } 50% { box-shadow: 0 0 1.5em 0.3em rgba(153,187,255,0.15); } }
 .breadcrumb { margin-bottom: 1em; font-size: 0.85em; overflow-x: auto; white-space: nowrap; }
 .file-list { list-style: none; }
 .file-list li { padding: 0.4em 0; border-bottom: 1px solid #222; }
 .file-list li:last-child { border-bottom: none; }
 .meta { color: #666; font-size: 0.85em; }
-nav { display: flex; justify-content: space-between; align-items: center; border-bottom: 0.15em dotted #666; padding-bottom: 0.5em; margin-bottom: 1em; font-size: 0.9em; }
+nav { display: flex; justify-content: space-between; align-items: center; border-bottom: 0.15em dotted #666; margin-bottom: 1em; font-size: 0.9em; }
+nav .tabs { display: flex; gap: 0; margin: 0; border: none; }
+nav .tab { padding: 0.4em 1em; color: #666; border-bottom: 0.15em solid transparent; margin-bottom: -0.15em; }
+nav .tab.active { color: #9bf; border-bottom-color: #9bf; }
+nav .account { white-space: nowrap; }
 .error { color: #f99; }
-.tabs { display: flex; gap: 0; margin-bottom: 1em; border-bottom: 0.15em dotted #666; }
-.tab { padding: 0.4em 1em; color: #666; font-size: 0.9em; border-bottom: 0.15em solid transparent; margin-bottom: -0.15em; }
-.tab.active { color: #9bf; border-bottom-color: #9bf; }
 .note-list { list-style: none; }
 .note-list li { border-bottom: 1px solid #222; }
 .note-list li:last-child { border-bottom: none; }
@@ -203,19 +206,14 @@ def _md_to_html(text: str) -> str:
     return "\n".join(html_parts)
 
 
-def _tabs_html(active: str) -> str:
-    """Render the tab bar. active is 'notes' or 'files'."""
-    nc = ' class="tab active"' if active == "notes" else ' class="tab"'
-    fc = ' class="tab active"' if active == "files" else ' class="tab"'
-    return f'<div class="tabs"><a href="/notes/"{nc}>Notes</a><a href="/browse/"{fc}>Files</a></div>'
-
-
 def page(title: str, body: str, user: str | None = None, active_tab: str | None = None) -> HTMLResponse:
     nav_html = ""
     if user:
-        nav_html = f'<nav><a href="/notes/">vault</a> <span>{user} · <a href="/logout">logout</a></span></nav>'
-    tabs = _tabs_html(active_tab) if active_tab else ""
-    html = f'<!doctype html><html><head><meta charset=utf-8><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><title>{title}</title><style>{CSS}</style></head><body>{nav_html}{tabs}{body}</body></html>'
+        nc = ' class="tab active"' if active_tab == "notes" else ' class="tab"'
+        fc = ' class="tab active"' if active_tab == "files" else ' class="tab"'
+        tabs = f'<div class="tabs"><a href="/notes/"{nc}>Notes</a><a href="/browse/"{fc}>Files</a></div>' if active_tab else ''
+        nav_html = f'<nav>{tabs}<span class="account">{user} · <a href="/logout">logout</a></span></nav>'
+    html = f'<!doctype html><html><head><meta charset=utf-8><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><title>{title}</title><style>{CSS}</style></head><body>{nav_html}{body}</body></html>'
     return HTMLResponse(html)
 
 
@@ -232,7 +230,7 @@ async def login_page(request: Request):
         return RedirectResponse("/notes/", status_code=302)
     body = """
     <div class="login-form">
-        <h1>vault login</h1>
+        <div class="logo"></div>
         <form method="post" action="/login">
             <input name="username" placeholder="username" required autofocus>
             <input name="password" type="password" placeholder="password" required>
@@ -249,7 +247,7 @@ async def login_submit(username: str = Form(), password: str = Form()):
     if expected is None or not bcrypt.checkpw(password.encode(), expected.encode()):
         body = """
         <div class="login-form">
-            <h1>vault login</h1>
+            <div class="logo"></div>
             <p class="error">invalid credentials</p>
             <form method="post" action="/login">
                 <input name="username" placeholder="username" required autofocus>
