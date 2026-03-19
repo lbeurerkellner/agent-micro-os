@@ -6,6 +6,7 @@ WORKDIR /app
 COPY pyproject.toml .
 COPY README.md .
 COPY uv.lock .
+COPY lib/ lib/
 COPY fs/ fs/
 COPY bin/ bin/
 COPY system/ system/

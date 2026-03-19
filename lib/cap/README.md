@@ -53,3 +53,24 @@ Network connections:
 ```
 
 The `cap` tool also allows you to run the shell command in an audited fashion, constrained by pre-defined capabilities. In this example, the shell has the capability to read and write only `README.md` and to make arbitrary HTTP requests. Upon completion, the changes to `README.md` are reported and written back to the host file system, and all network connections made are also reported.
+
+## Linux Host Setup
+
+On Linux hosts (as opposed to Docker Desktop on macOS/Windows), Docker containers use the bridge network by default. Two additional firewall rules are required for cap to work correctly:
+
+```bash
+# Allow containers to route traffic to the internet
+sudo ufw route allow in on docker0 out on eth0
+
+# Allow containers to reach host services (needed for cap's network proxy)
+sudo ufw allow in on docker0
+```
+
+Additionally, on some VPS providers (e.g. Hetzner), you may need to configure Docker's MTU to match the host network:
+
+```bash
+# Check host MTU: ip link show eth0 | grep mtu
+# If below 1500, set in /etc/docker/daemon.json:
+echo '{"mtu": 1400}' | sudo tee /etc/docker/daemon.json
+sudo systemctl restart docker
+```

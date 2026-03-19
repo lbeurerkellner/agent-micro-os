@@ -342,19 +342,38 @@ def build_deps_image(name: str, dependencies: list, tag: str, platform: str = No
 
 
 def build_final_image(deps_tag: str, body: str, lang: str, tag: str, platform: str = None,
-                      verbose: bool = False):
+                      verbose: bool = False, user: str = None):
     if lang == "python":
         script_file = "cli.py"
-        entrypoint = '["python3", "/app/cli.py"]'
+        run_cmd = "python3 /app/cli.py"
         extra_layers = ""
     elif lang == "js":
         script_file = "cli.js"
-        entrypoint = '["node", "/app/cli.js"]'
+        run_cmd = "node /app/cli.js"
         extra_layers = ""
     else:  # sh
         script_file = "cli.sh"
-        entrypoint = '["/bin/sh", "/app/cli.sh"]'
+        run_cmd = "/bin/sh /app/cli.sh"
         extra_layers = "RUN chmod +x /app/cli.sh\n"
+
+    if user:
+        # Entrypoint wrapper: start as root, fix workspace ownership,
+        # then drop to the target user.  This is needed because the
+        # bind-mounted workspace is owned by the host UID (usually 0)
+        # and tools like Claude Code refuse config files owned by
+        # a different user.
+        entrypoint_sh = (
+            "#!/bin/sh\n"
+            f"chown -R {user}:{user} /workspace 2>/dev/null\n"
+            f"exec su -s /bin/sh capuser -c '{run_cmd} \"$@\"' -- \"$@\"\n"
+        )
+        extra_layers += "COPY entrypoint.sh /app/entrypoint.sh\nRUN chmod +x /app/entrypoint.sh\n"
+        entrypoint = '["/app/entrypoint.sh"]'
+    else:
+        entrypoint_sh = None
+        parts = ", ".join('"' + w + '"' for w in run_cmd.split())
+        entrypoint = f'[{parts}]'
+
     dockerfile = (
         f"FROM {deps_tag}\n"
         f"COPY {script_file} /app/{script_file}\n"
@@ -365,6 +384,8 @@ def build_final_image(deps_tag: str, body: str, lang: str, tag: str, platform: s
     capture = {} if verbose else {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
     with tempfile.TemporaryDirectory() as tmp:
         Path(tmp, script_file).write_text(body)
+        if entrypoint_sh:
+            Path(tmp, "entrypoint.sh").write_text(entrypoint_sh)
         Path(tmp, "Dockerfile").write_text(dockerfile)
         if verbose:
             _status(f"Building final image {tag} ...")
@@ -1032,7 +1053,8 @@ def _run_tool(meta, body, extra_args, *, cwd=None, force_build=False,
         if force_build or not image_exists(deps_tag):
             build_deps_image(name, deps, deps_tag, platform=platform, ca_cert_path=ca_cert_path,
                              user=user, verbose=verbose)
-        build_final_image(deps_tag, body, lang, final_tag, platform=platform, verbose=verbose)
+        build_final_image(deps_tag, body, lang, final_tag, platform=platform, verbose=verbose,
+                          user=user)
 
     # --- Secrets -----------------------------------------------------------
     secret_values = resolve_secrets(name, full_hash, secrets, script_path=script_path)
@@ -1070,7 +1092,9 @@ def _run_tool(meta, body, extra_args, *, cwd=None, force_build=False,
     workspace_mount = ["-v", f"{workspace_tmp}:/workspace"]
     home_dir = "/home/capuser" if user else "/root"
     home_volume_args = ["-v", f"cap-{name}-home:{home_dir}"] if meta["stateful"] else []
-    user_args = ["--user", f"{user}:{user}"] if user else []
+    # When user is set, the entrypoint wrapper starts as root to chown
+    # /workspace, then drops to the target user — no --user flag needed.
+    user_args = []
 
     docker_cmd = [
         "docker", "run", "--rm", *tty, *platform_args,
